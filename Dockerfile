@@ -1,5 +1,6 @@
 FROM node:20-alpine
-RUN apk add --no-cache postgresql16-client tini
+# عميل 17 ليطابق خادم Supabase — pg_dump الأقدم يرفض الخوادم الأحدث
+RUN apk add --no-cache postgresql17-client tini
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
