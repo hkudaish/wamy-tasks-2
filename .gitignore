@@ -3,7 +3,7 @@ node_modules/
 uploads/
 *.log
 backups/
-Pass.txt
+pass.txt
 .runtime/
 *.dump
 *.xlsx

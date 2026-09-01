@@ -14,19 +14,9 @@ router.use(requireAuth);
 
 const adminLog = (userId, type, text) =>
   q('INSERT INTO activity(task_id,user_id,type,text) VALUES(NULL,$1,$2,$3)', [userId, type, text]);
-const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads'));
-async function purgeUploadedFiles() {
-  let entries=[];
-  try { entries=await fs.promises.readdir(UPLOAD_DIR,{withFileTypes:true}); } catch(e) { if(e.code==='ENOENT')return 0;throw e; }
-  let deleted=0;
-  for(const entry of entries){
-    if(!entry.isFile())continue;
-    const target=path.resolve(UPLOAD_DIR,entry.name);
-    if(path.dirname(target)!==UPLOAD_DIR)continue;
-    await fs.promises.unlink(target);deleted++;
-  }
-  return deleted;
-}
+const S = require('./storage');
+/* يمسح كل المرفقات من التخزين الفعّال (Supabase أو القرص) — يُستدعى من إعادة الضبط */
+const purgeUploadedFiles = () => S.purgeAll();
 const requirePlanAccess = (req, res, next) =>
   ['admin','director'].includes(req.me?.role) ? next() : res.status(403).json({ error: 'استيراد الخطة متاح لمدير النظام ومدير الإدارة.' });
 

@@ -2,21 +2,26 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const multer = require('multer');
 const { q, one, all, tx, getSetting } = require('./db');
 const L = require('./logic');
 const { notify } = require('./mailer');
 const { requireAuth } = require('./auth');
+const S = require('./storage');
 
 const router = express.Router();
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+/* المرفقات تُخزَّن عبر server/storage.js (Supabase أو القرص حسب البيئة).
+   multer يكتب مؤقتًا إلى tmp ثم نقرأ ملفًا واحدًا في كل مرة، فلا يتجاوز
+   استهلاك الذاكرة حجم ملف واحد مهما بلغ عدد الملفات المرفوعة. */
+const TMP_DIR = path.join(os.tmpdir(), 'wamy-uploads');
+fs.mkdirSync(TMP_DIR, { recursive: true });
 
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 20);
 const ALLOWED_MIME = /^(image\/(png|jpe?g|gif|webp|svg\+xml)|application\/(pdf|zip|msword|vnd\.|octet-stream)|text\/(plain|csv))/;
 const upload = multer({
   storage: multer.diskStorage({
-    destination: (_r, _f, cb) => cb(null, UPLOAD_DIR),
+    destination: (_r, _f, cb) => cb(null, TMP_DIR),
     filename: (_r, f, cb) =>
       cb(null, Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) + path.extname(f.originalname).slice(0, 12)),
   }),
@@ -967,10 +972,25 @@ router.post('/tasks/:id/attachments', requireAuth, upload.array('files', 10), as
   if (!t || !L.canUpdateTask(req.me, t)) return res.status(403).json({ error: 'لا تملك صلاحية.' });
   const files = req.files || [];
   if (!files.length) return res.status(400).json({ error: 'لم يُرفع أي ملف مقبول. الأنواع المسموحة: صور، PDF، مستندات، نصوص.' });
-  for (const f of files) {
-    await q('INSERT INTO attachments(task_id,stored_name,orig_name,size,mime,uploaded_by) VALUES($1,$2,$3,$4,$5,$6)',
-      [t.id, f.filename, Buffer.from(f.originalname, 'latin1').toString('utf8'), f.size, f.mimetype, req.me.id]);
-    await audit(t.id, req.me.id, 'edit', `أرفق ملف: ${Buffer.from(f.originalname, 'latin1').toString('utf8')}`);
+  const stored = [];
+  try {
+    for (const f of files) {
+      const name = Buffer.from(f.originalname, 'latin1').toString('utf8');
+      const key = S.newKey(t.id, name);
+      const buf = await fs.promises.readFile(f.path);
+      await S.save(buf, key, f.mimetype);
+      stored.push(key);
+      await q('INSERT INTO attachments(task_id,stored_name,orig_name,size,mime,uploaded_by) VALUES($1,$2,$3,$4,$5,$6)',
+        [t.id, key, name, f.size, f.mimetype, req.me.id]);
+      await audit(t.id, req.me.id, 'edit', `أرفق ملف: ${name}`);
+    }
+  } catch (e) {
+    /* تنظيف ما رُفع قبل العطل حتى لا تبقى كائنات يتيمة في التخزين */
+    for (const k of stored) await S.remove(k);
+    console.error('[attachments]', e);
+    return res.status(502).json({ error: 'تعذّر حفظ المرفق في التخزين. أعد المحاولة.' });
+  } finally {
+    for (const f of files) fs.promises.unlink(f.path).catch(() => {});
   }
   res.json({ task: (await loadTasks(req.me, [t.id]))[0] });
 });
@@ -980,7 +1000,8 @@ router.get('/attachments/:aid', requireAuth, async (req, res) => {
   if (!a) return res.status(404).json({ error: 'المرفق غير موجود.' });
   const t = await getTask(a.task_id);
   if (!L.canSeeTask(req.me, t)) return res.status(403).json({ error: 'لا تملك صلاحية.' });
-  res.download(path.join(UPLOAD_DIR, a.stored_name), a.orig_name);
+  try { await S.serve(res, a.stored_name, a.orig_name); }
+  catch (e) { console.error('[attachments]', e); res.status(502).json({ error: 'تعذّر جلب المرفق من التخزين.' }); }
 });
 
 router.delete('/attachments/:aid', requireAuth, async (req, res) => {
@@ -989,7 +1010,7 @@ router.delete('/attachments/:aid', requireAuth, async (req, res) => {
   const t = await getTask(a.task_id);
   if (!L.canUpdateTask(req.me, t)) return res.status(403).json({ error: 'لا تملك صلاحية.' });
   await q('DELETE FROM attachments WHERE id=$1', [a.id]);
-  fs.promises.unlink(path.join(UPLOAD_DIR, a.stored_name)).catch(() => {});
+  await S.remove(a.stored_name);
   await audit(t.id, req.me.id, 'edit', 'حذف المرفق: ' + a.orig_name);
   res.json({ task: (await loadTasks(req.me, [t.id]))[0] });
 });

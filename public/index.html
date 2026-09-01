@@ -3148,7 +3148,7 @@ function tabOver(t,e,editable){
   ${(t.attachments||[]).length?t.attachments.map((a,i)=>{
       const o = typeof a==='string'?{name:a,size:0}:a;
       return `<div class="att"><span>📎</span>
-        <span class="an">${o.data?`<a href="${o.data}" download="${esc(o.name)}" style="color:var(--brand)">${esc(o.name)}</a>`:esc(o.name)}</span>
+        <span class="an">${(o.url||o.data)?`<a href="${o.url||o.data}" download="${esc(o.name)}" target="_blank" rel="noopener" style="color:var(--brand)">${esc(o.name)}</a>`:esc(o.name)}</span>
         <span class="as">${o.size?fmtSize(o.size):''}${o.by?' · '+esc(uname(o.by)):''}</span>
         ${editable?`<button class="tag-del" onclick="delAttach(${i})">✕</button>`:''}</div>`}).join('')
     :'<div class="t-meta">لا توجد مرفقات.</div>'}

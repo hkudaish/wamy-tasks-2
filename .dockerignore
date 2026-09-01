@@ -9,7 +9,7 @@ node_modules/
 *.log
 *.dump
 *.xlsx
-Pass.txt
+pass.txt
 .git/
 .gitignore
 scripts/*.ps1

@@ -6,13 +6,18 @@
 # ملاحظة عن قاعدة البيانات: نستخدم Supabase الخارجية، لا قاعدة من Render.
 #   DATABASE_URL يجب أن يشير إلى Transaction pooler على المنفذ 6543:
 #   postgresql://postgres.<ref>:<كلمة-المرور>@aws-0-<region>.pooler.supabase.com:6543/postgres
+#   انسخه من لوحة Supabase حرفيًا — بادئة المضيف تختلف بين المشاريع (aws-0 / aws-1).
 #   ورمّز الرموز الخاصة: %→%25  @→%40  #→%23  /→%2F
+#
+# المرفقات: Supabase Storage (bucket خاص) — راجع server/storage.js.
+# التوقيت: TZ للحاوية، وبقاعدة البيانات نفّذ مرة واحدة:
+#   ALTER DATABASE postgres SET timezone = 'Asia/Riyadh';
 
 services:
   - type: web
     name: wamy-tasks
     runtime: docker
-    plan: free                 # غيّرها إلى starter لتفادي التوقف بعد الخمول
+    plan: starter              # المجانية تنام بعد 15 دقيقة فيتعطّل الملخص اليومي
     region: frankfurt          # الأقرب للسعودية من المتاح
     branch: main
     dockerfilePath: ./Dockerfile
@@ -54,15 +59,21 @@ services:
       - key: DIGEST_HOUR
         value: "7"
       - key: MAX_UPLOAD_MB
-        value: "10"
-      - key: UPLOAD_DIR
-        value: /app/uploads
+        value: "20"   # مطابق للبيئة المحلية؛ لا يمر عبر حدود دوال عديمة الخادم
+      - key: TZ
+        value: Asia/Riyadh      # الحاوية UTC افتراضيًا فينزاح الملخص اليومي 3 ساعات
+
+      # ---- تخزين المرفقات على Supabase Storage ----
+      # لا حاجة لقرص دائم: الملفات خارج الحاوية وتنجو من كل نشر
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_BUCKET
+        value: task-attachments
+      - key: SUPABASE_SIGN_TTL
+        value: "60"
 
 
-    # ---- قرص دائم للمرفقات ----
-    # الخطة المجانية لا تدعم الأقراص: أي مرفق يُمسح مع كل نشر.
-    # عند الترقية إلى starter أزل التعليق عن السطور الثلاثة:
-    # disk:
-    #   name: uploads
-    #   mountPath: /app/uploads
-    #   sizeGB: 1
+    # ---- لا قرص دائم ----
+    # المرفقات تُخزَّن في Supabase Storage، فلا حاجة إلى disk نهائيًا.
