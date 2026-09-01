@@ -87,7 +87,7 @@ function visibilityClause(me, startIndex = 1) {
   }
   if (me.role === 'director')
     return {
-      sql: `(EXISTS (SELECT 1 FROM departments vd WHERE vd.id=t.dept_id AND vd.organization_id = ANY(${startIndex})) OR t.assignee_id=${startIndex+1} OR t.creator_id=${startIndex+2})`,
+      sql: `(EXISTS (SELECT 1 FROM departments vd WHERE vd.id=t.dept_id AND vd.organization_id = ANY($${startIndex})) OR t.assignee_id=$${startIndex+1} OR t.creator_id=$${startIndex+2})`,
       params: [orgScope(me),me.id,me.id],
     };
   if (me.role === 'manager')
