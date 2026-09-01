@@ -43,8 +43,8 @@ services:
       # ---- التطبيق ----
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: "3000"
+      # PORT: لا تُعرَّف — Render تحقنها (10000 افتراضيًا)
+      #        والكود يقرأ process.env.PORT || 3000 فيحترمها
       - key: APP_URL
         sync: false            # https://<اسم-الخدمة>.onrender.com
       - key: ALLOWED_DOMAIN
