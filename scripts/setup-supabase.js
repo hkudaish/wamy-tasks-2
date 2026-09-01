@@ -41,6 +41,21 @@ let failed = false;
     process.exit(1);
   }
   if (!/^https:\/\/[a-z0-9]+\.supabase\.co$/.test(URL)) warn(`صيغة SUPABASE_URL غير معتادة: ${URL}`);
+  /* القيم تُرسل في ترويسات HTTP فيجب أن تكون ASCII بحتة.
+     أشهر سبب للفشل هنا: بقاء النص التوضيحي العربي مكان المفتاح. */
+  for (const [name, val] of [['SUPABASE_URL', URL], ['SUPABASE_SERVICE_KEY', KEY]]) {
+    if (/[^\x21-\x7E]/.test(val)) {
+      bad(`${name} يحوي محارف غير لاتينية أو مسافات — القيمة ليست مفتاحًا حقيقيًا.`);
+      console.log(`      القيمة الحالية تبدأ بـ: ${val.slice(0, 24)}…`);
+      console.log('      الصق القيمة كما هي من اللوحة، بلا أقواس < > ولا علامات اقتباس.\n');
+      process.exit(1);
+    }
+  }
+  if (!KEY.startsWith('eyJ')) {
+    bad('المفتاح لا يبدأ بـ eyJ — المتوقع مفتاح service_role القديم (JWT).');
+    console.log('      من صفحة API Keys اختر تبويب Legacy API Keys وانسخ حقل service_role.\n');
+    process.exit(1);
+  }
   // مفتاح service_role يحمل role=service_role في حمولته
   try {
     const payload = JSON.parse(Buffer.from(KEY.split('.')[1], 'base64').toString());
