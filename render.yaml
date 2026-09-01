@@ -58,17 +58,6 @@ services:
       - key: UPLOAD_DIR
         value: /app/uploads
 
-      # ---- البريد (اختياري — اتركها فارغة يبقى الإشعار داخل التطبيق فقط) ----
-      - key: SMTP_HOST
-        sync: false
-      - key: SMTP_PORT
-        sync: false
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASS
-        sync: false
-      - key: SMTP_FROM
-        sync: false
 
     # ---- قرص دائم للمرفقات ----
     # الخطة المجانية لا تدعم الأقراص: أي مرفق يُمسح مع كل نشر.
