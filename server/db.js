@@ -2,6 +2,11 @@
 require('dotenv').config();
 const { Pool } = require('pg');
 
+if (!process.env.DATABASE_URL) {
+  console.error('[db] متغيّر DATABASE_URL غير مضبوط. بدونه يحاول الاتصال بـ localhost:5432 ويفشل.');
+  console.error('[db] اضبطه في بيئة التشغيل، مثال: postgresql://user:pass@host:6543/postgres');
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: Number(process.env.PG_POOL_MAX || 10),
