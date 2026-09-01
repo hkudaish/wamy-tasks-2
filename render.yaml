@@ -1,0 +1,79 @@
+# مخطط النشر على Render — نظام إدارة ومتابعة المهام (وامي)
+#
+# الاستخدام: في Render اختر New → Blueprint واربط المستودع.
+# القيم المعلَّمة بـ sync:false يطلبها Render منك عند الإنشاء ولا تُحفظ في المستودع.
+#
+# ملاحظة عن قاعدة البيانات: نستخدم Supabase الخارجية، لا قاعدة من Render.
+#   DATABASE_URL يجب أن يشير إلى Transaction pooler على المنفذ 6543:
+#   postgresql://postgres.<ref>:<كلمة-المرور>@aws-0-<region>.pooler.supabase.com:6543/postgres
+#   ورمّز الرموز الخاصة: %→%25  @→%40  #→%23  /→%2F
+
+services:
+  - type: web
+    name: wamy-tasks
+    runtime: docker
+    plan: free                 # غيّرها إلى starter لتفادي التوقف بعد الخمول
+    region: frankfurt          # الأقرب للسعودية من المتاح
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+
+    envVars:
+      # ---- قاعدة البيانات (سرّية — تُدخَل عند الإنشاء) ----
+      - key: DATABASE_URL
+        sync: false
+      - key: PG_SSL
+        value: "true"
+      - key: PG_POOL_MAX
+        value: "5"             # منخفض عمدًا: المجمِّع يتولى التوزيع
+
+      # ---- الجلسة والأمان ----
+      - key: SESSION_SECRET
+        generateValue: true    # يولّده Render عشوائيًا وآمنًا
+      - key: COOKIE_SECURE
+        value: "true"          # إلزامي على HTTPS
+      - key: TRUST_PROXY
+        value: "1"             # خلف وسيط Render — بدونه يتعطّل حدّ المحاولات
+      - key: LOCK_MAX_FAILS
+        value: "5"
+      - key: LOCK_WINDOW_MIN
+        value: "15"
+
+      # ---- التطبيق ----
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: APP_URL
+        sync: false            # https://<اسم-الخدمة>.onrender.com
+      - key: ALLOWED_DOMAIN
+        value: wamy.org
+      - key: ADMIN_EMAIL
+        value: admin@wamy.org
+      - key: DIGEST_HOUR
+        value: "7"
+      - key: MAX_UPLOAD_MB
+        value: "10"
+      - key: UPLOAD_DIR
+        value: /app/uploads
+
+      # ---- البريد (اختياري — اتركها فارغة يبقى الإشعار داخل التطبيق فقط) ----
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+
+    # ---- قرص دائم للمرفقات ----
+    # الخطة المجانية لا تدعم الأقراص: أي مرفق يُمسح مع كل نشر.
+    # عند الترقية إلى starter أزل التعليق عن السطور الثلاثة:
+    # disk:
+    #   name: uploads
+    #   mountPath: /app/uploads
+    #   sizeGB: 1

@@ -1,0 +1,16 @@
+# لا تُنسخ إلى صورة Docker إطلاقًا
+.env
+.env.*
+!.env.example
+.runtime/
+backups/
+uploads/
+node_modules/
+*.log
+*.dump
+*.xlsx
+Pass.txt
+.git/
+.gitignore
+scripts/*.ps1
+README.md
