@@ -470,10 +470,17 @@ input[type=range]{flex:1;accent-color:var(--brand)}
 .wz-step.on .wz-num{background:var(--brand);color:var(--on-brand,#fff)}
 .wz-step.done .wz-num{background:var(--green,#16a34a);color:#fff}
 .wz-step .wz-lb{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wz-greet{margin-bottom:14px}
-.wz-hi{font-size:17px;font-weight:700}
-.wz-sub{font-size:13px;color:var(--muted);margin-top:2px}
-.wz-q{margin-top:12px;font-size:13.5px;font-weight:600}
+.wz-greet{
+  position:relative;overflow:hidden;margin-bottom:18px;padding:18px 20px;border:1px solid color-mix(in srgb,var(--brand) 24%,var(--border));
+  border-radius:14px;background:linear-gradient(125deg,color-mix(in srgb,var(--brand-soft) 82%,var(--surface)) 0%,var(--surface) 62%,color-mix(in srgb,var(--accent) 9%,var(--surface)) 100%);
+  box-shadow:0 8px 24px color-mix(in srgb,var(--brand) 10%,transparent)
+}
+.wz-greet::before{content:"";position:absolute;inset-block:0;inset-inline-start:0;width:5px;background:linear-gradient(180deg,var(--accent),var(--brand))}
+.wz-hi{font-size:21px;font-weight:800;line-height:1.45;letter-spacing:.1px;color:var(--brand)}
+.wz-hi .wz-person{color:var(--accent);text-shadow:0 1px 0 color-mix(in srgb,var(--surface) 75%,transparent)}
+.wz-sub{display:inline-flex;align-items:center;margin-top:5px;padding:2px 10px;border-radius:999px;font-size:14px;font-weight:700;color:var(--green);background:var(--green-soft)}
+.wz-q{margin-top:15px;padding:11px 13px;border:1px solid color-mix(in srgb,var(--accent) 28%,var(--border));border-inline-start:4px solid var(--accent);border-radius:10px;background:color-mix(in srgb,var(--surface) 92%,var(--accent));font-size:15px;font-weight:800;color:var(--text);box-shadow:var(--shadow)}
+.wz-q .wz-person{color:var(--brand);font-weight:800}
 .wz-count{font-size:11.5px;color:var(--muted);margin:8px 0}
 .people-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:10px;max-height:46vh;overflow:auto;padding:2px}
 .person-card{position:relative;padding:11px 12px;border:1px solid var(--border);border-radius:11px;background:var(--surface);cursor:pointer;transition:.15s;min-width:0}
@@ -594,6 +601,7 @@ mark{background:var(--amber-soft);color:var(--amber);padding:0 2px;border-radius
   .dash-home{height:auto;min-height:0}.dash-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.dash-columns{grid-template-columns:1fr}.dash-panel>.card-b{overflow:visible}
 }
 @media(max-width:560px){
+  .wz-greet{padding:15px 16px}.wz-hi{font-size:18px}.wz-q{font-size:14px}
   .welcome-card{align-items:flex-start;flex-direction:column;gap:12px}
   .welcome-copy .hello{font-size:16.5px}
   .welcome-datetime{width:100%;padding:11px 0 0;border-inline-start:0;border-top:1px solid var(--border);justify-content:space-between;gap:10px}
@@ -703,7 +711,7 @@ mark{background:var(--amber-soft);color:var(--amber);padding:0 2px;border-radius
 <script>
 /* ============================================================
    نظام إدارة ومتابعة المهام — وامي
-   نموذج تشغيلي كامل (Prototype) — ملف واحد بلا اعتماديات
+   واجهة التشغيل — ملف واحد بلا اعتماديات خارجية
    ============================================================ */
 
 /* ---------- أدوات التاريخ ---------- */
@@ -865,6 +873,24 @@ const EVENT_UNITS = {
   day: { label: 'يوم', ms: 86400000 },
   week: { label: 'أسبوع', ms: 604800000 },
 };
+const TASK_DURATION_UNITS = {
+  hour: { label: 'ساعة' },
+  day: { label: 'يوم' },
+  month: { label: 'شهر' },
+};
+function taskDurationValue(t){ return Number(t?.durationValue ?? t?.est ?? 1); }
+function taskDurationUnit(t){ return TASK_DURATION_UNITS[t?.durationUnit] ? t.durationUnit : 'day'; }
+function taskDurationText(t){ const u=taskDurationUnit(t); return `${nfm(taskDurationValue(t))} ${TASK_DURATION_UNITS[u].label}`; }
+function taskDurationEstDays(value,unit){ return Math.max(1,Math.ceil(Number(value)*(unit==='hour'?1/24:unit==='month'?30:1))); }
+function taskDurationDue(start,value,unit){
+  if(!start)return '';
+  const d=parse(start), n=Math.max(1,Number(value)||1);
+  if(unit==='month'){
+    const day=d.getDate(); d.setDate(1); d.setMonth(d.getMonth()+Math.round(n));
+    const last=new Date(d.getFullYear(),d.getMonth()+1,0).getDate(); d.setDate(Math.min(day,last));
+  }else d.setTime(d.getTime()+n*(unit==='hour'?3600000:MS));
+  return iso(d);
+}
 const EVENT_STATUS = {
   live: { label: 'تقام الآن', cls: 'b-green' },
   upcoming: { label: 'قادمة', cls: 'b-blue' },
@@ -1090,57 +1116,8 @@ function paintBrandMarks(){
   document.querySelectorAll('[data-brand-org-txt]').forEach(e=>e.textContent=BRAND.org);
 }
 
-/* ============================================================
-   طبقة الحفظ الدائم (تُخزَّن محليًا في متصفح المستخدم)
-   ============================================================ */
-const SKEY='wamy_task_system_v2';
-let PERSIST_OK=true;
-const STORE={
-  save(){
-    try{
-      localStorage.setItem(SKEY, JSON.stringify({
-        v:2, at:new Date().toISOString(), SEQ,
-        TASKS, USERS, DEPTS, CATEGORIES, STATUSES, PRIORITIES,
-        CUSTOM_FIELDS, CFG, SAVED_FILTERS, LOGIN_LOG, BRAND, NOTIFS
-      }));
-      return true;
-    }catch(e){ PERSIST_OK=false; return false; }
-  },
-  load(){
-    try{
-      const raw=localStorage.getItem(SKEY); if(!raw) return false;
-      const d=JSON.parse(raw); if(!d||!d.TASKS) return false;
-      TASKS=d.TASKS; SEQ=d.SEQ||TASKS.length+1;
-      if(d.USERS) USERS=d.USERS;
-      if(d.DEPTS) DEPTS=d.DEPTS;
-      if(d.CATEGORIES) CATEGORIES=d.CATEGORIES;
-      if(d.STATUSES) STATUSES=d.STATUSES;
-      if(d.PRIORITIES) PRIORITIES=d.PRIORITIES;
-      if(d.CUSTOM_FIELDS) CUSTOM_FIELDS=d.CUSTOM_FIELDS;
-      if(d.SAVED_FILTERS) SAVED_FILTERS=d.SAVED_FILTERS;
-      if(d.LOGIN_LOG) LOGIN_LOG=d.LOGIN_LOG;
-      if(d.CFG) Object.assign(CFG,d.CFG);
-      if(d.BRAND) Object.assign(BRAND,d.BRAND);
-      if(d.NOTIFS) NOTIFS=d.NOTIFS;
-      LAST_SAVE=d.at;
-      return true;
-    }catch(e){ PERSIST_OK=false; return false; }
-  },
-  clear(){ try{ localStorage.removeItem(SKEY); }catch(e){} }
-};
-let LAST_SAVE=null;
-function save(){ if(PERSIST_OK && STORE.save()) LAST_SAVE=new Date().toISOString(); }
-function resetData(){
-  if(!confirm('سيتم حذف كل البيانات الحالية والعودة إلى البيانات التجريبية الأصلية. متابعة؟')) return;
-  STORE.clear(); location.reload();
-}
-
-/* ---------- سجل محاولات الدخول ---------- */
+/* ---------- سجل محاولات الدخول (يأتي من الخادم) ---------- */
 let LOGIN_LOG=[];
-function logLogin(email,ok,reason){
-  LOGIN_LOG.unshift({at:new Date().toISOString(), email, ok, reason:reason||''});
-  LOGIN_LOG=LOGIN_LOG.slice(0,200);
-}
 
 /* ---------- الحالة العامة ---------- */
 let ME=null, PAGE='dash', VIEW='table', CAL_OFFSET=0, NOTIFS=[], MINE_VIEW='home', EVENT_VIEW='current';
@@ -1322,39 +1299,6 @@ function printHead(){
   </div>`;
 }
 
-/* ---------- تسجيل الدخول ---------- */
-function renderDemo(){
-  document.getElementById('domHint').textContent='@'+CFG.domains[0];
-  applyBrand();
-  document.getElementById('demoList').innerHTML = ['u1','u4','u6'].map(id=>{
-    const u=U(id);
-    return `<button class="demo-chip" onclick="quickLogin('${id}')"><b>${esc(u.name)}</b> — <span>${ROLE_AR[u.role]} · ${esc(u.title)}</span></button>`;
-  }).join('');
-}
-function quickLogin(id){ const u=U(id); document.getElementById('lgEmail').value=u.email; document.getElementById('lgPass').value='wamy1234'; doLogin(); }
-function doLogin(){
-  const em=document.getElementById('lgEmail').value.trim().toLowerCase();
-  const pw=document.getElementById('lgPass').value;
-  const err=document.getElementById('lgErr');
-  const dom=em.split('@')[1]||'';
-  if(!em||!pw){ err.textContent='الرجاء إدخال البريد وكلمة المرور.'; return; }
-  if(!CFG.domains.includes(dom)){ err.textContent=`الدخول مسموح فقط ببريد ${CFG.domains.map(d=>'@'+d).join(' أو ')} — لا تُقبل البُرد الشخصية.`; logLogin(em,false,'نطاق بريد غير معتمد'); save(); return; }
-  const u=USERS.find(x=>x.email.toLowerCase()===em);
-  if(!u){ err.textContent='هذا البريد غير مسجّل في النظام. راجع مدير النظام.'; logLogin(em,false,'بريد غير مسجّل'); save(); return; }
-  if(pw.length<6){ err.textContent='كلمة المرور غير صحيحة.'; logLogin(em,false,'كلمة مرور غير صحيحة'); save(); return; }
-  ME=u; err.textContent=''; logLogin(em,true,'');
-  document.getElementById('login').style.display='none';
-  document.getElementById('app').style.display='block';
-  document.getElementById('meAv').textContent=initials(u.name);
-  document.getElementById('meNm').textContent=u.name;
-  document.getElementById('meRl').textContent=ROLE_AR[u.role]+' · '+dname(u.dept);
-  document.getElementById('brandUser').textContent='المستخدم الحالي: '+u.name;
-  PAGE = u.role==='employee' ? 'mine' : 'dash';
-  buildNotifs(); renderNav(); render(); resetIdle();
-  toast('مرحبًا '+u.name.split(' ')[0]);
-}
-function logout(){ ME=null; if(typeof IDLE_T!=='undefined') clearTimeout(IDLE_T); document.getElementById('app').style.display='none'; document.getElementById('login').style.display='flex'; document.getElementById('lgPass').value=''; }
-
 /* ---------- القائمة الجانبية ---------- */
 function renderNav(){
   const v=visible();
@@ -1403,7 +1347,7 @@ function updateWelcomeCard(){
 }
 function startWelcomeClock(){clearInterval(WELCOME_CLOCK_T);updateWelcomeCard();WELCOME_CLOCK_T=setInterval(updateWelcomeCard,1000);}
 function render(){
-  buildNotifs(); save();
+  buildNotifs();
   updateWelcomeCard();
   document.getElementById('pgTitle').textContent =
     (PAGE==='mine' && ME.role==='employee' && MINE_VIEW==='home') ? 'صفحتي اليوم' : (PAGE_TITLES[PAGE]||'');
@@ -2478,8 +2422,8 @@ function compareBody(){
 
 /* ---------- التصدير ---------- */
 function taskRows(list){
-  const H=['المعرف','المهمة','الوصف','التصنيف','الأولوية','الحالة','الإدارة','المسؤول','منشئ المهمة','تاريخ الإنشاء','تاريخ البدء','المدة المقدرة (يوم)','الموعد النهائي','نسبة الإنجاز','أيام التأخير','عدد التمديدات','تاريخ الإغلاق','المؤشر','التقييم','سبب التأخير'];
-  const R=list.map(t=>{const e=evaluate(t);return [t.id,t.title,t.desc,cname(t.cat),PR(t.pri).name,ST(effStatus(t)).name,dname(t.dept),uname(t.assignee),uname(t.creator),t.created,t.start,t.est,t.due,t.progress+'%',lateDays(t),(t.ext||[]).length,t.closed||'',e.score,e.grade.t,t.delayReason||'']});
+  const H=['المعرف','المهمة','الوصف','التصنيف','الأولوية','الحالة','الإدارة','المسؤول','منشئ المهمة','تاريخ الإنشاء','تاريخ البدء','المدة المقدرة','الموعد النهائي','نسبة الإنجاز','أيام التأخير','عدد التمديدات','تاريخ الإغلاق','المؤشر','التقييم','سبب التأخير'];
+  const R=list.map(t=>{const e=evaluate(t);return [t.id,t.title,t.desc,cname(t.cat),PR(t.pri).name,ST(effStatus(t)).name,dname(t.dept),uname(t.assignee),uname(t.creator),t.created,t.start,taskDurationText(t),t.due,t.progress+'%',lateDays(t),(t.ext||[]).length,t.closed||'',e.score,e.grade.t,t.delayReason||'']});
   return {H,R};
 }
 function dl(content,name,type){
@@ -3133,7 +3077,7 @@ function tabOver(t,e,editable){
     ${mi('التصنيف',esc(cname(t.cat)))}
     ${mi('تاريخ الإنشاء',fmtDate(t.created))}
     ${mi('تاريخ البدء',fmtDate(t.start))}
-    ${mi('المدة المقدرة',nfm(t.est)+' يوم')}
+    ${mi('المدة المقدرة',taskDurationText(t))}
     ${mi('الموعد النهائي',`<span style="color:${isLate(t)?'var(--red)':'inherit'};font-weight:600">${fmtDate(t.due)}</span>`)}
     ${mi(isLate(t)?'أيام التأخير':'الأيام المتبقية', isDone(t)?'—':`<span style="font-weight:700;color:${isLate(t)?'var(--red)':dl<=CFG.nearDueDays?'var(--amber)':'var(--green)'}">${isLate(t)?nfm(lateDays(t)):nfm(dl)} يوم</span>`)}
     ${mi('آخر تحديث',fmtDT(t.updated))}
@@ -3271,7 +3215,7 @@ function spawnRecur(t){
     assignee:t.assignee, creator:t.creator,
     created:iso(TODAY),
     start:iso(new Date(parse(t.start).getTime()+step*MS)),
-    est:t.est,
+    est:t.est, durationValue:taskDurationValue(t), durationUnit:taskDurationUnit(t),
     due:iso(new Date(parse(t.due).getTime()+step*MS)),
     status:'new', progress:0, notes:'', recur:t.recur,
     subtasks:(t.subtasks||[]).map((x,i)=>({id:i+1,title:x.title,done:false})),
@@ -3453,7 +3397,10 @@ function openTaskForm(id){
     <div><label class="fl">الموظف المسؤول <span class="req">*</span></label><select class="inp" id="fA" onchange="syncDept()">${assignable.map(u=>`<option value="${u.id}" ${t&&t.assignee===u.id?'selected':''}>${u.name} — ${dname(u.dept)}</option>`).join('')}</select></div>
     <div><label class="fl">الإدارة</label><select class="inp" id="fDep">${o(DEPTS,t?t.dept:ME.dept)}</select></div>
     <div><label class="fl">تاريخ بدء التنفيذ <span class="req">*</span></label><input class="inp" type="date" id="fS" value="${t?t.start:iso(TODAY)}" onchange="calcDue()"></div>
-    <div><label class="fl">المدة المقدّرة (أيام)</label><input class="inp" type="number" id="fE" min="1" value="${t?t.est:5}" onchange="calcDue()"></div>
+    <div><label class="fl">المدة المقدّرة</label><div class="step-duration">
+      <input class="inp" type="number" id="fE" min="1" step="1" value="${t?taskDurationValue(t):5}" onchange="calcDue()">
+      <select class="inp" id="fEU" onchange="calcDue()">${Object.entries(TASK_DURATION_UNITS).map(([k,u])=>`<option value="${k}" ${(t?taskDurationUnit(t):'day')===k?'selected':''}>${u.label}</option>`).join('')}</select>
+    </div></div>
     <div><label class="fl">الموعد النهائي <span class="req">*</span></label><input class="inp" type="date" id="fU" value="${t?t.due:D(5)}"></div>
     <div><label class="fl">الحالة</label><select class="inp" id="fSt">${o(STATUSES,t?t.status:'new')}</select></div>
     <div><label class="fl">نسبة الإنجاز</label><div class="range-row"><input type="range" id="fPr" min="0" max="100" step="5" value="${t?t.progress:0}" oninput="document.getElementById('prv').textContent=this.value+'%'"><span class="pct" id="prv">${t?t.progress:0}%</span></div></div>
@@ -3470,38 +3417,8 @@ function openTaskForm(id){
 function syncDept(){ const u=U(document.getElementById('fA').value); document.getElementById('fDep').value=u.dept; }
 function calcDue(){
   const s=document.getElementById('fS').value, e=+document.getElementById('fE').value||1;
-  if(s) document.getElementById('fU').value=iso(new Date(parse(s).getTime()+e*MS));
+  if(s) document.getElementById('fU').value=taskDurationDue(s,e,document.getElementById('fEU').value);
 }
-function saveTask(id){
-  const g=x=>document.getElementById(x).value;
-  const title=g('fT').trim();
-  if(!title){ toast('اسم المهمة مطلوب'); return; }
-  const t = id?TASKS.find(x=>x.id===id):null;
-  const data={title, desc:g('fD'), pri:g('fP'), cat:g('fC'), assignee:g('fA'), dept:g('fDep'),
-    start:g('fS'), est:+g('fE'), due:g('fU'), status:g('fSt'), progress:+g('fPr'), notes:g('fN'), recur:g('fR')||null};
-  if(t){
-    const changes=[];
-    if(t.status!==data.status) changes.push(`الحالة: «${ST(t.status).name}» ← «${ST(data.status).name}»`);
-    if(t.progress!==data.progress) changes.push(`الإنجاز: ${t.progress}% ← ${data.progress}%`);
-    if(t.assignee!==data.assignee) changes.push(`المسؤول: ${uname(t.assignee)} ← ${uname(data.assignee)}`);
-    if(t.due!==data.due){ changes.push(`الموعد: ${fmtDate(t.due)} ← ${fmtDate(data.due)}`);
-      notify('deadline',t.id,`تغيّر الموعد النهائي لـ«${t.title}» إلى ${fmtDate(data.due)}`,[t.assignee]); }
-    if(t.assignee!==data.assignee) notify('assign',t.id,`أُسندت إليك المهمة «${t.title}»`,[data.assignee]);
-    Object.assign(t,data);
-    if(data.status==='done'&&!t.closed) t.closed=iso(TODAY);
-    logAdd(t,'edit','عدّل المهمة'+(changes.length?' — '+changes.join('، '):''));
-    if(CUR&&CUR.id===t.id) drawTask();
-    toast('حُفظت التعديلات');
-  } else {
-    const nt=T(Object.assign({creator:ME.id, created:iso(TODAY)}, data));
-    nt.log=[{at:new Date().toISOString(),by:ME.id,type:'create',txt:`أنشأ المهمة وأسندها إلى ${uname(data.assignee)}`}];
-    nt.updated=new Date().toISOString();
-    notify('assign',nt.id,`أُسندت إليك مهمة جديدة «${nt.title}» — الاستحقاق ${fmtDate(nt.due)}`,[nt.assignee]);
-    toast('أُنشئت المهمة '+nt.id);
-  }
-  closeAll(); renderNav(); render();
-}
-
 /* ============================================================
    البحث السريع (Ctrl + K)
    ============================================================ */
@@ -3629,12 +3546,7 @@ function upsertTask(t) {
 }
 const act = (id, action, value, reason) => API.post(`/tasks/${id}/action`, { action, value, reason });
 
-/* ============================================================
-   الحفظ المحلي مُعطّل — الخادم هو المخزن
-   ============================================================ */
-function save() {}
-function seedExtras() {}
-function resetData() { toast('إعادة التعيين تتم من الخادم — راجع دليل النشر.'); }
+/* الخادم وPostgreSQL هما المصدر الوحيد للبيانات. */
 let STRUCTURE_IMPORT=[];
 async function structureUpload(inp){
   const f=inp.files[0];if(!f)return;const fd=new FormData();fd.append('file',f);inp.value='';
@@ -3755,11 +3667,9 @@ async function boot(user, mustChange) {
   EVENTS = b.events || [];
   Object.assign(CFG, b.cfg); Object.assign(BRAND, b.brand);
   SAVED_FILTERS = b.savedFilters || [];
-  const [t, n, ev] = await Promise.all([API.get('/tasks'), API.get('/notifications'), API.get('/events')]);
+  const [t, n] = await Promise.all([API.get('/tasks'), API.get('/notifications')]);
   TASKS = t.tasks;
   setNotifs(n.notifications);
-  if (ev?.eventTypes) EVENT_TYPES = ev.eventTypes;
-  if (ev?.events) EVENTS = ev.events;
 
   document.getElementById('login').style.display = 'none';
   document.getElementById('app').style.display = 'block';
@@ -3922,9 +3832,11 @@ async function saveTask(id) {
   const g = (x) => document.getElementById(x).value;
   const title = g('fT').trim();
   if (!title) { toast('اسم المهمة مطلوب'); return; }
+  const duration = +g('fE'), durationUnit = g('fEU');
   const data = {
     title, desc: g('fD'), pri: g('fP'), cat: g('fC'), assignee: g('fA'), dept: g('fDep'),
-    start: g('fS'), est: +g('fE'), due: g('fU'), status: g('fSt'),
+    start: g('fS'), est: taskDurationEstDays(duration, durationUnit), duration, durationUnit,
+    due: g('fU'), status: g('fSt'),
     progress: +g('fPr'), notes: g('fN'), recur: g('fR') || null,
   };
   const r = await run(() => (id ? API.patch(`/tasks/${id}`, data) : API.post('/tasks', data)),
@@ -3980,7 +3892,7 @@ function wzCanEditDue() { return hasUserPermission(ME, 'manage_tasks'); }
 function openTaskWizard() {
   WZ = {
     step: 1, people: assignableUsers(), assignees: [], title: '', desc: '',
-    start: iso(TODAY), est: 5, due: D(5), pri: 'medium',
+    start: iso(TODAY), est: 5, durationUnit: 'day', due: D(5), pri: 'medium',
     cat: (CATEGORIES.find(c => c.id === 'admin') || CATEGORIES[0] || {}).id || 'admin',
   };
   wzRender();
@@ -3999,6 +3911,7 @@ function wzCapture() {
   if (WZ.step === 3) {
     WZ.start = g('wzStart') || WZ.start;
     WZ.est = Math.max(1, +g('wzEst') || 1);
+    WZ.durationUnit = TASK_DURATION_UNITS[g('wzEstUnit')] ? g('wzEstUnit') : WZ.durationUnit;
     WZ.due = g('wzDue') || WZ.due;
     WZ.pri = g('wzPri') || WZ.pri;
     WZ.cat = g('wzCat') || WZ.cat;
@@ -4025,7 +3938,8 @@ function wzToggle(id) {
 }
 function wzCalcDue() {
   const s = document.getElementById('wzStart').value, e = +document.getElementById('wzEst').value || 1;
-  if (s) document.getElementById('wzDue').value = iso(new Date(parse(s).getTime() + e * MS));
+  const unit = document.getElementById('wzEstUnit').value;
+  if (s) document.getElementById('wzDue').value = taskDurationDue(s, e, unit);
 }
 
 function wzPersonCard(u) {
@@ -4046,9 +3960,9 @@ function wzBody() {
   if (WZ.step === 1) {
     const hon = wzHonorific(ME), fn = esc(wzFirstName(ME)), morn = wzIsMorning();
     return `<div class="wz-greet">
-      <div class="wz-hi">${morn ? 'صباح الخير' : 'مساء الخير'} ${hon} ${fn}</div>
+      <div class="wz-hi">${morn ? 'صباح الخير' : 'مساء الخير'} ${hon} <span class="wz-person">${fn}</span></div>
       <div class="wz-sub">${morn ? 'إنه صباح جميل!' : 'إنه مساء جميل!'}</div>
-      <div class="wz-q">لمن ترغب في إسناد هذه المهمة ${hon} ${fn}؟</div></div>
+      <div class="wz-q">لمن ترغب في إسناد هذه المهمة ${hon} <span class="wz-person">${fn}</span>؟</div></div>
       ${WZ.people.length
         ? `<div class="wz-count">${nfm(WZ.people.length)} ضمن نطاق صلاحياتك · المحدد: ${nfm(WZ.assignees.length)}</div>
            <div class="people-grid">${WZ.people.map(wzPersonCard).join('')}</div>`
@@ -4067,8 +3981,10 @@ function wzBody() {
     return `<div class="form-grid">
       <div><label class="fl">تاريخ بداية المهمة <span class="req">*</span></label>
         <input class="inp" type="date" id="wzStart" value="${WZ.start}" onchange="wzCalcDue()"></div>
-      <div><label class="fl">المدة المطلوبة للتنفيذ (أيام)</label>
-        <input class="inp" type="number" min="1" id="wzEst" value="${WZ.est}" onchange="wzCalcDue()"></div>
+      <div><label class="fl">المدة المطلوبة للتنفيذ</label><div class="step-duration">
+        <input class="inp" type="number" min="1" step="1" id="wzEst" value="${WZ.est}" onchange="wzCalcDue()">
+        <select class="inp" id="wzEstUnit" onchange="wzCalcDue()">${Object.entries(TASK_DURATION_UNITS).map(([k,u])=>`<option value="${k}" ${WZ.durationUnit===k?'selected':''}>${u.label}</option>`).join('')}</select>
+      </div></div>
       <div><label class="fl">موعد الانتهاء <span class="req">*</span></label>
         <input class="inp" type="date" id="wzDue" value="${WZ.due}" ${ro}>
         ${ro ? '<div class="t-meta">يُحتسب تلقائيًا — تعديله يحتاج صلاحية إدارة المهام.</div>' : ''}</div>
@@ -4087,7 +4003,7 @@ function wzBody() {
     ${row('وصف المهمة', WZ.desc ? esc(WZ.desc) : '—')}
     ${row('المسندة إليهم', `<div class="wz-chips">${chips}</div>`)}
     ${row('تاريخ البداية', fmtDate(WZ.start))}
-    ${row('المدة', nfm(WZ.est) + ' يوم')}
+    ${row('المدة', nfm(WZ.est) + ' ' + TASK_DURATION_UNITS[WZ.durationUnit].label)}
     ${row('موعد الانتهاء', fmtDate(WZ.due))}
     ${row('الأهمية والأولوية', esc(pri))}
     ${row('التصنيف', esc(cat))}
@@ -4126,7 +4042,9 @@ async function wzSubmit() {
     try {
       const r = await API.post('/tasks', {
         title: WZ.title, desc: WZ.desc, pri: WZ.pri, cat: WZ.cat, assignee: uid,
-        start: WZ.start, est: WZ.est, due: WZ.due, status: 'new', progress: 0, notes: '', recur: null,
+        start: WZ.start, est: taskDurationEstDays(WZ.est, WZ.durationUnit),
+        duration: WZ.est, durationUnit: WZ.durationUnit,
+        due: WZ.due, status: 'new', progress: 0, notes: '', recur: null,
       });
       upsertTask(r.task); ok.push(r.task.id);
     } catch (e) {
@@ -4255,9 +4173,9 @@ function ewBody() {
       return `<div class="empty">لا توجد جهة يمكنك تنظيم فعالية باسمها وفق صلاحياتك وموقعك في الهيكل الإداري.</div>`;
     const others = EW.depts.filter(d => d.id !== EW.organizer);
     return `<div class="wz-greet">
-      <div class="wz-hi">${morn ? 'صباح الخير' : 'مساء الخير'} ${hon} ${fn}</div>
+      <div class="wz-hi">${morn ? 'صباح الخير' : 'مساء الخير'} ${hon} <span class="wz-person">${fn}</span></div>
       <div class="wz-sub">${morn ? 'إنه صباح جميل!' : 'إنه مساء جميل!'}</div>
-      <div class="wz-q">أي جهة تنظّم هذه الفعالية ${hon} ${fn}؟</div></div>
+      <div class="wz-q">أي جهة تنظّم هذه الفعالية ${hon} <span class="wz-person">${fn}</span>؟</div></div>
       <div class="wz-count">${nfm(EW.depts.length)} جهة ضمن نطاق صلاحياتك — اختر جهة منظّمة واحدة</div>
       <div class="people-grid">${EW.depts.map(d => ewDeptCard(d, 'org')).join('')}</div>
       ${EW.organizer ? `<div class="wz-q" style="margin-top:14px">جهات مشاركة في التنظيم <span class="t-meta">(اختياري)</span></div>

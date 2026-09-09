@@ -130,6 +130,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_date  DATE NOT NULL DEFAULT CURRENT_DATE,
   start_date    DATE NOT NULL,
   est_days      INT  NOT NULL DEFAULT 1 CHECK (est_days > 0),
+  duration_value NUMERIC(10,2) CHECK (duration_value IS NULL OR duration_value > 0),
+  duration_unit TEXT NOT NULL DEFAULT 'day' CHECK (duration_unit IN ('hour','day','month')),
   due_date      DATE NOT NULL,
   closed_date   DATE,
   progress      INT  NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
@@ -148,6 +150,16 @@ CREATE INDEX IF NOT EXISTS idx_tasks_dept     ON tasks(dept_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status   ON tasks(status_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_due      ON tasks(due_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_updated  ON tasks(updated_at DESC);
+
+-- مدة المهمة بصيغتها الأصلية. يبقى est_days عددًا محسوبًا بالأيام للتوافق
+-- مع مؤشرات الأداء والتقارير والبيانات القديمة.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS duration_value NUMERIC(10,2);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS duration_unit TEXT NOT NULL DEFAULT 'day';
+UPDATE tasks SET duration_value=est_days WHERE duration_value IS NULL;
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_duration_value_check;
+ALTER TABLE tasks ADD CONSTRAINT tasks_duration_value_check CHECK (duration_value IS NULL OR duration_value > 0);
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_duration_unit_check;
+ALTER TABLE tasks ADD CONSTRAINT tasks_duration_unit_check CHECK (duration_unit IN ('hour','day','month'));
 
 -- ترميز الحالة البصري الموحّد: إنشاء، تنفيذ، اكتمال بانتظار الإغلاق، ثم إغلاق.
 UPDATE statuses SET cls='b-blue', color='var(--blue)' WHERE id IN ('new','notstarted');

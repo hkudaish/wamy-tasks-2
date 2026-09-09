@@ -15,7 +15,7 @@ router.use(requireAuth);
 const adminLog = (userId, type, text) =>
   q('INSERT INTO activity(task_id,user_id,type,text) VALUES(NULL,$1,$2,$3)', [userId, type, text]);
 const S = require('./storage');
-/* يمسح كل المرفقات من التخزين الفعّال (Supabase أو القرص) — يُستدعى من إعادة الضبط */
+/* يمسح كل المرفقات من التخزين المحلي — يُستدعى من إعادة الضبط */
 const purgeUploadedFiles = () => S.purgeAll();
 const requirePlanAccess = (req, res, next) =>
   ['admin','director'].includes(req.me?.role) ? next() : res.status(403).json({ error: 'استيراد الخطة متاح لمدير النظام ومدير الإدارة.' });

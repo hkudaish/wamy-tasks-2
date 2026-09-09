@@ -11,7 +11,9 @@
     "migrate": "node server/migrate.js",
     "seed": "node server/seed.js",
     "setup": "npm run migrate && npm run seed",
-    "backup": "bash scripts/backup.sh"
+    "backup": "bash scripts/backup.sh",
+    "check": "node scripts/check-project.js",
+    "test:rbac": "node scripts/test-rbac.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

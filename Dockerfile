@@ -1,5 +1,5 @@
 FROM node:20-alpine
-# عميل 17 ليطابق خادم Supabase — pg_dump الأقدم يرفض الخوادم الأحدث
+# عميل PostgreSQL حديث لضمان توافق النسخ الاحتياطية مع الخادم
 RUN apk add --no-cache postgresql17-client tini
 WORKDIR /app
 COPY package*.json ./

@@ -11,7 +11,7 @@ const { requireAuth } = require('./auth');
 const S = require('./storage');
 
 const router = express.Router();
-/* المرفقات تُخزَّن عبر server/storage.js (Supabase أو القرص حسب البيئة).
+/* المرفقات تُخزَّن على القرص عبر server/storage.js.
    multer يكتب مؤقتًا إلى tmp ثم نقرأ ملفًا واحدًا في كل مرة، فلا يتجاوز
    استهلاك الذاكرة حجم ملف واحد مهما بلغ عدد الملفات المرفوعة. */
 const TMP_DIR = path.join(os.tmpdir(), 'wamy-uploads');
@@ -62,6 +62,22 @@ function stepLocal(v) {
 const stepDate = (v) => (stepLocal(v) || '').slice(0, 10) || null;
 const EVENT_UNIT_MS = STEP_UNIT_MS;
 const EVENT_UNITS = STEP_UNITS;
+const TASK_DURATION_UNITS = new Set(['hour', 'day', 'month']);
+const TASK_DURATION_DAYS = { hour: 1 / 24, day: 1, month: 30 };
+
+function taskDuration(body, current = null) {
+  const rawValue = body.duration !== undefined ? body.duration
+    : body.est !== undefined ? body.est
+    : current?.duration_value ?? current?.est_days ?? 1;
+  const value = Number(rawValue);
+  const unit = body.durationUnit !== undefined ? String(body.durationUnit) : current?.duration_unit || 'day';
+  if (!Number.isFinite(value) || value <= 0)
+    return { error: 'مدة المهمة يجب أن تكون رقمًا أكبر من صفر.' };
+  if (!TASK_DURATION_UNITS.has(unit))
+    return { error: 'وحدة مدة المهمة غير مدعومة.' };
+  const rounded = Math.round(value * 100) / 100;
+  return { value: rounded, unit, days: Math.max(1, Math.ceil(rounded * TASK_DURATION_DAYS[unit])) };
+}
 
 function eventStatus(e, at = new Date()) {
   if (e.cancelled_at) return 'cancelled';
@@ -198,7 +214,10 @@ function serialize(t, extras = {}) {
     assignee: t.assignee_id, creator: t.creator_id, status: t.status_id,
     created: L.iso(t.created_date), start: L.iso(t.start_date), due: L.iso(t.due_date),
     closed: t.closed_date ? L.iso(t.closed_date) : null,
-    est: t.est_days, progress: t.progress, notes: t.notes, delayReason: t.delay_reason,
+    est: t.est_days,
+    durationValue: t.duration_value == null ? t.est_days : Number(t.duration_value),
+    durationUnit: t.duration_unit || 'day',
+    progress: t.progress, notes: t.notes, delayReason: t.delay_reason,
     quality: t.quality, recur: t.recur, recurDone: t.recur_done, parentRecur: t.parent_recur,
     cf: t.cf || {}, updated: t.updated_at,
     planRef: t.plan_ref, planYear: t.plan_year,
@@ -295,10 +314,11 @@ async function spawnRecurrence(t, userId) {
     const id = await nextTaskId(c);
     await c.query(
       `INSERT INTO tasks(id,title,description,priority_id,category_id,dept_id,assignee_id,creator_id,status_id,
-        created_date,start_date,est_days,due_date,progress,notes,recur,parent_recur)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,'new',CURRENT_DATE,$9,$10,$11,0,'',$12,$13)`,
+        created_date,start_date,est_days,duration_value,duration_unit,due_date,progress,notes,recur,parent_recur)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,'new',CURRENT_DATE,$9,$10,$11,$12,$13,0,'',$14,$15)`,
       [id, t.title, t.description, t.priority_id, t.category_id, t.dept_id, t.assignee_id, t.creator_id,
-       L.addDays(t.start_date, step), t.est_days, L.addDays(t.due_date, step), t.recur, t.id]
+       L.addDays(t.start_date, step), t.est_days, t.duration_value, t.duration_unit || 'day',
+       L.addDays(t.due_date, step), t.recur, t.id]
     );
     const subs = await c.query('SELECT title, sort FROM subtasks WHERE task_id=$1 ORDER BY sort,id', [t.id]);
     for (const s of subs.rows) await c.query('INSERT INTO subtasks(task_id,title,done,sort) VALUES($1,$2,false,$3)', [id, s.title, s.sort]);
@@ -391,6 +411,8 @@ router.post('/tasks', requireAuth, async (req, res) => {
   if (!b.title || !String(b.title).trim()) return res.status(400).json({ error: 'اسم المهمة مطلوب.' });
   if (!b.assignee || !b.due || !b.start) return res.status(400).json({ error: 'المسؤول وتاريخ البدء والموعد النهائي حقول إلزامية.' });
   if (L.diffDays(b.start, b.due) < 0) return res.status(400).json({ error: 'الموعد النهائي يسبق تاريخ البدء.' });
+  const duration = taskDuration(b);
+  if (duration.error) return res.status(400).json({ error: duration.error });
 
   const checked = await validateAssignee(req.me, b.assignee);
   if (checked.error) return res.status(req.me.role === 'employee' ? 403 : 400).json({ error: checked.error });
@@ -400,11 +422,12 @@ router.post('/tasks', requireAuth, async (req, res) => {
     const nid = await nextTaskId(c);
     await c.query(
       `INSERT INTO tasks(id,title,description,priority_id,category_id,dept_id,assignee_id,creator_id,status_id,
-        start_date,est_days,due_date,progress,notes,recur)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        start_date,est_days,duration_value,duration_unit,due_date,progress,notes,recur)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
       [nid, String(b.title).trim(), b.desc || '', b.pri || 'medium', b.cat || 'admin',
        assignee.dept_id, b.assignee, req.me.id, b.status || 'new',
-       b.start, Math.max(1, Number(b.est) || 1), b.due, Math.min(100, Math.max(0, Number(b.progress) || 0)), b.notes || '', b.recur || null]
+       b.start, duration.days, duration.value, duration.unit, b.due,
+       Math.min(100, Math.max(0, Number(b.progress) || 0)), b.notes || '', b.recur || null]
     );
     return nid;
   });
@@ -444,7 +467,14 @@ router.patch('/tasks/:id', requireAuth, async (req, res) => {
   put('title', b.title); put('description', b.desc);
   put('priority_id', b.pri); put('category_id', b.cat);
   put('dept_id', b.dept); put('assignee_id', b.assignee, 'المسؤول');
-  put('start_date', b.start); put('est_days', b.est !== undefined ? Math.max(1, Number(b.est)) : undefined);
+  put('start_date', b.start);
+  if (b.duration !== undefined || b.durationUnit !== undefined || b.est !== undefined) {
+    const duration = taskDuration(b, t);
+    if (duration.error) return res.status(400).json({ error: duration.error });
+    put('est_days', duration.days);
+    put('duration_value', duration.value);
+    put('duration_unit', duration.unit);
+  }
   put('due_date', b.due, 'الموعد', fmtDate);
   put('notes', b.notes); put('recur', b.recur === '' ? null : b.recur);
   if (b.status !== undefined && b.status !== t.status_id && b.status !== 'late') {

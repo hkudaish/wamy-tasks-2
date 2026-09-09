@@ -1,7 +1,9 @@
 'use strict';
+require('dotenv').config();
 const BASE=process.env.TEST_BASE_URL||'http://127.0.0.1:3000/api';
 const ADMIN_EMAIL=process.env.ADMIN_EMAIL||'admin@wamy.org';
-const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||'WamyAdmin_2026_Local';
+const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD;
+if(!ADMIN_PASSWORD)throw new Error('ADMIN_PASSWORD must be set before running the RBAC integration test.');
 const stamp=Date.now();
 const made={orgs:[],tasks:[]};
 const results=[];
