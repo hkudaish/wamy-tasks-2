@@ -1168,8 +1168,8 @@ html[data-theme="dark"] .msg-app {
   -webkit-backdrop-filter: none;
 }
 .msg-sidebar {
-  width: 320px;
-  min-width: 280px;
+  width: 360px;
+  min-width: 300px;
   border-inline-end: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -1188,17 +1188,16 @@ html[data-theme="dark"] .msg-app {
 }
 .msg-tabs {
   display: flex;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: 5px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
 }
 .msg-tab-btn {
-  padding: 4px 9px;
+  padding: 4px 10px;
   border-radius: 16px;
-  border: 1px solid transparent;
-  background: transparent;
+  border: 1px solid var(--border-glass);
+  background: var(--surface);
   color: var(--muted);
   font-size: 11.5px;
   font-weight: 600;
@@ -1206,13 +1205,18 @@ html[data-theme="dark"] .msg-app {
   white-space: nowrap;
   transition: all 0.15s ease;
 }
-.msg-tab-btn:hover {
+html[data-theme="dark"] .msg-tab-btn {
   background: var(--surface);
-  color: var(--text);
+  border-color: var(--border);
+}
+.msg-tab-btn:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
 }
 .msg-tab-btn.active {
   background: var(--brand);
   color: #fff;
+  border-color: var(--brand);
 }
 .msg-list {
   flex: 1;
