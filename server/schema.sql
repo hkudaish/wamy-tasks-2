@@ -393,3 +393,71 @@ FROM users AS u
 WHERE o.director_id = u.id
   AND btrim(o.name) = 'الإدارة ' || btrim(o.code)
   AND u.role = 'director';
+
+-- ============================================================
+-- نظام المراسلات والمحادثات — وامي (إضافة 2026-09)
+-- محادثات مقيدة بالصلاحيات والهيكل الإداري وسياق المهام
+-- ============================================================
+CREATE TABLE IF NOT EXISTS conversations (
+  id                   TEXT PRIMARY KEY,
+  type                 TEXT NOT NULL DEFAULT 'DIRECT' CHECK (type IN ('DIRECT','TASK','GROUP')),
+  title                TEXT,
+  project_id           TEXT,
+  plan_id              TEXT,
+  task_id              TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  created_by           TEXT REFERENCES users(id) ON DELETE SET NULL,
+  last_message_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_message_preview TEXT DEFAULT '',
+  last_message_sender_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_task ON conversations(task_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_last_msg ON conversations(last_message_at DESC);
+
+CREATE TABLE IF NOT EXISTS conversation_participants (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  joined_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_read_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+  is_pinned       BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (conversation_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conv_part_user ON conversation_participants(user_id, last_read_at);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id                  BIGSERIAL PRIMARY KEY,
+  conversation_id     TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  message             TEXT NOT NULL DEFAULT '',
+  reply_to_message_id BIGINT REFERENCES chat_messages(id) ON DELETE SET NULL,
+  is_pinned           BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  edited_at           TIMESTAMPTZ,
+  deleted_at          TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_chat_msg_conv ON chat_messages(conversation_id, created_at ASC);
+
+CREATE TABLE IF NOT EXISTS message_attachments (
+  id            BIGSERIAL PRIMARY KEY,
+  message_id    BIGINT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  storage_key   TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  file_size     BIGINT NOT NULL DEFAULT 0,
+  mime_type     TEXT NOT NULL DEFAULT 'application/octet-stream',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_msg_attach_msg ON message_attachments(message_id);
+
+CREATE TABLE IF NOT EXISTS message_references (
+  id              BIGSERIAL PRIMARY KEY,
+  message_id      BIGINT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  reference_type  TEXT NOT NULL CHECK (reference_type IN ('TASK','PROCEDURE','SUB_PROCEDURE','USER')),
+  reference_id    TEXT NOT NULL,
+  reference_title TEXT NOT NULL DEFAULT '',
+  reference_meta  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_msg_ref_msg ON message_references(message_id);
+

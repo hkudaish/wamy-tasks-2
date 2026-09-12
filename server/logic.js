@@ -128,10 +128,107 @@ function normPhone(v) {
   return { phone: p, note };
 }
 
+/* ============================================================
+   صلاحيات المراسلات والمحادثات — وامي (إضافة 2026-09)
+   نموذج أمان متعدد المستويات يمنع المراسلة العشوائية
+   ويحدد الأهلية حسب: الصلاحية + النطاق + الهيكل + سياق المهمة
+   ============================================================ */
+function canViewChat(me) {
+  if (!me || !me.active) return false;
+  if (me.role === 'admin') return true;
+  return me.permissions?.chat_view !== false;
+}
+
+function canStartChat(me) {
+  if (!canViewChat(me)) return false;
+  if (me.role === 'admin') return true;
+  return me.permissions?.chat_start !== false;
+}
+
+function canSendChatMessage(me) {
+  if (!canViewChat(me)) return false;
+  if (me.role === 'admin') return true;
+  return me.permissions?.chat_send_message !== false;
+}
+
+function canAttachChatFile(me) {
+  if (!canViewChat(me)) return false;
+  if (me.role === 'admin') return true;
+  return me.permissions?.chat_attach_file !== false;
+}
+
+/**
+ * فحص أهلية المراسلة المباشرة بين مستخدمين
+ * يمنع وصول المستخدم لجهات اتصال خارج نطاقه الإداري أو علاقاته المعتمدة
+ */
+function canMessageUser(me, targetUser, context = {}) {
+  if (!canStartChat(me) || !targetUser || !targetUser.active) return false;
+  if (me.id === targetUser.id) return false;
+
+  // مسؤول النظام يمكنه مراسلة أي مستخدم، ومراسلة مسؤول النظام متاحة دائمًا
+  if (me.role === 'admin' || targetUser.role === 'admin') return true;
+
+  // الأمين العام ومساعده يمكنهما التواصل على مستوى المنظمة
+  if (['secretary_general', 'assistant_secretary_general'].includes(me.role)) return true;
+  if (['secretary_general', 'assistant_secretary_general'].includes(targetUser.role)) return true;
+
+  // إذا وُجد تعاون مثبت في مهمة مشتركة مصرح بها للطرفين
+  if (context.sharedTask || (context.collaboratorIds && context.collaboratorIds.includes(targetUser.id))) {
+    return true;
+  }
+
+  // نطاق مدير الإدارة: منسوبو إدارته + القيادة العليا
+  if (me.role === 'director') {
+    const myOrgs = orgScope(me);
+    if (targetUser.organization_id && myOrgs.includes(targetUser.organization_id)) return true;
+    if (['secretary_general', 'assistant_secretary_general', 'admin', 'consultant'].includes(targetUser.role)) return true;
+    return false;
+  }
+
+  // إذا كان الطرف الآخر مدير إدارة يتبع له المستخدم
+  if (targetUser.role === 'director') {
+    const targetOrgs = orgScope(targetUser);
+    if (me.organization_id && targetOrgs.includes(me.organization_id)) return true;
+  }
+
+  // نطاق رئيس القسم / المدير المباشر: منسوبو القسم + المرؤوسون المباشرون + المدير الأعلى
+  if (me.role === 'manager') {
+    if (me.dept_id && targetUser.dept_id === me.dept_id) return true;
+    if (targetUser.manager_id === me.id) return true;
+    if (me.manager_id === targetUser.id) return true;
+    return false;
+  }
+
+  // إذا كان الطرف الآخر رئيساً لقسم المستخدم
+  if (targetUser.role === 'manager' && me.dept_id && targetUser.dept_id === me.dept_id) {
+    return true;
+  }
+
+  // نطاق الموظف: مديره المباشر + رئيس قسمه + زملاء نفس القسم
+  if (me.role === 'employee') {
+    if (me.manager_id && targetUser.id === me.manager_id) return true;
+    if (targetUser.manager_id && targetUser.manager_id === me.id) return true;
+    if (me.dept_id && targetUser.dept_id === me.dept_id) return true;
+    return false;
+  }
+
+  // المستشار
+  if (me.role === 'consultant' || targetUser.role === 'consultant') {
+    if (['admin', 'secretary_general', 'assistant_secretary_general', 'director', 'manager'].includes(me.role) ||
+        ['admin', 'secretary_general', 'assistant_secretary_general', 'director', 'manager'].includes(targetUser.role)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 module.exports = {
   MS, today, toDate, iso, diffDays, daysFromToday, addDays,
   effStatus, isDone, lateDays, evaluate, grade,
   RECUR_STEP, RECUR_AR, CLOSED_STATUSES,
   canSeeTask, canManageTask, canUpdateTask, visibilityClause, orgScope,
   normPhone,
+  canViewChat, canStartChat, canSendChatMessage, canAttachChatFile, canMessageUser,
 };
+

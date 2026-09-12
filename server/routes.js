@@ -1119,4 +1119,550 @@ router.delete('/filters/:fid', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+/* ============================================================
+   نظام المراسلات والمحادثات — وامي (إضافة 2026-09)
+   محادثات مقيدة بالصلاحيات والهيكل الإداري وسياق المهام
+   ============================================================ */
+
+/** عدد الرسائل غير المقروءة للطرف الحالي (لشارة القائمة الجانبية) */
+router.get('/chat/unread-count', requireAuth, async (req, res) => {
+  if (!L.canViewChat(req.me)) return res.json({ unreadCount: 0 });
+  const row = await one(
+    `SELECT COUNT(m.id)::int as n
+     FROM chat_messages m
+     JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id AND cp.user_id = $1 AND cp.is_active = true
+     WHERE m.sender_id <> $1
+       AND m.deleted_at IS NULL
+       AND m.created_at > cp.last_read_at`,
+    [req.me.id]
+  );
+  res.json({ unreadCount: row ? Number(row.n) : 0 });
+});
+
+/** جهات الاتصال المؤهلة للمراسلة فقط (حسب الهيكل والصلاحيات والمهام المشتركة) */
+router.get('/chat/contacts', requireAuth, async (req, res) => {
+  if (!L.canStartChat(req.me)) return res.json({ contacts: [] });
+
+  // جلب المتعاونين في مهام مشتركة مع المستخدم الحالي
+  const collabRows = await all(
+    `SELECT DISTINCT assignee_id as uid FROM tasks WHERE creator_id = $1 AND assignee_id IS NOT NULL
+     UNION
+     SELECT DISTINCT creator_id as uid FROM tasks WHERE assignee_id = $1 AND creator_id IS NOT NULL`,
+    [req.me.id]
+  );
+  const collaboratorIds = collabRows.map((r) => r.uid).filter(Boolean);
+
+  const hiddenClause = req.me.role === 'admin' ? '' : 'AND (dept_id IS NULL OR dept_id NOT IN (SELECT id FROM departments WHERE hidden))';
+  const allUsers = await all(
+    `SELECT id, name, email, phone, employee_no, dept_id, organization_id, role, title, active, permissions
+     FROM users
+     WHERE active = true AND id <> $1 ${hiddenClause}
+     ORDER BY name ASC`,
+    [req.me.id]
+  );
+
+  const eligible = allUsers.filter((u) => L.canMessageUser(req.me, u, { collaboratorIds }));
+  res.json({
+    contacts: eligible.map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      phone: u.phone || '',
+      employeeNo: u.employee_no || '',
+      dept: u.dept_id,
+      organization: u.organization_id,
+      role: u.role,
+      title: u.title || '',
+    })),
+  });
+});
+
+/** استعراض قائمة المحادثات المصرح بها للمستخدم */
+router.get('/chat/conversations', requireAuth, async (req, res) => {
+  if (!L.canViewChat(req.me)) return res.json({ conversations: [] });
+
+  const convRows = await all(
+    `SELECT c.*, cp.last_read_at, cp.is_pinned
+     FROM conversations c
+     JOIN conversation_participants cp ON cp.conversation_id = c.id AND cp.user_id = $1 AND cp.is_active = true
+     ORDER BY cp.is_pinned DESC, c.last_message_at DESC`,
+    [req.me.id]
+  );
+
+  if (!convRows.length) return res.json({ conversations: [] });
+
+  const convIds = convRows.map((c) => c.id);
+
+  // جلب جميع أطراف هذه المحادثات
+  const participants = await all(
+    `SELECT cp.conversation_id, cp.user_id, cp.last_read_at, cp.is_active,
+            u.name, u.role, u.title, u.dept_id, u.organization_id, u.active, u.last_login_at
+     FROM conversation_participants cp
+     JOIN users u ON u.id = cp.user_id
+     WHERE cp.conversation_id = ANY($1)`,
+    [convIds]
+  );
+
+  // حساب غير المقروء لكل محادثة
+  const unreadRows = await all(
+    `SELECT m.conversation_id, COUNT(m.id)::int as n
+     FROM chat_messages m
+     JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id AND cp.user_id = $1
+     WHERE m.conversation_id = ANY($2)
+       AND m.sender_id <> $1
+       AND m.deleted_at IS NULL
+       AND m.created_at > cp.last_read_at
+     GROUP BY m.conversation_id`,
+    [req.me.id, convIds]
+  );
+  const unreadMap = Object.fromEntries(unreadRows.map((r) => [r.conversation_id, Number(r.n)]));
+
+  // جلب معلومات المهام المرتبطة إن وجدت
+  const taskIds = [...new Set(convRows.map((c) => c.task_id).filter(Boolean))];
+  let tasksMap = {};
+  if (taskIds.length) {
+    const tRows = await all(
+      `SELECT t.id, t.title, t.status_id, t.due_date, t.progress, t.assignee_id, t.dept_id, t.organization_id,
+              u.name as assignee_name
+       FROM tasks t
+       LEFT JOIN users u ON u.id = t.assignee_id
+       WHERE t.id = ANY($1)`,
+      [taskIds]
+    );
+    for (const tr of tRows) {
+      if (L.canSeeTask(req.me, tr)) {
+        tasksMap[tr.id] = {
+          id: tr.id,
+          title: tr.title,
+          status: tr.status_id,
+          dueDate: tr.due_date,
+          progress: tr.progress,
+          assigneeName: tr.assignee_name,
+        };
+      }
+    }
+  }
+
+  const partMap = {};
+  for (const p of participants) {
+    if (!partMap[p.conversation_id]) partMap[p.conversation_id] = [];
+    partMap[p.conversation_id].push({
+      id: p.user_id,
+      name: p.name,
+      role: p.role,
+      title: p.title || '',
+      dept: p.dept_id,
+      organization: p.organization_id,
+      active: p.active,
+      lastLoginAt: p.last_login_at,
+      lastReadAt: p.last_read_at,
+    });
+  }
+
+  const result = convRows.map((c) => {
+    const parts = partMap[c.id] || [];
+    const other = parts.find((p) => p.id !== req.me.id) || parts[0] || { name: 'محادثة' };
+    return {
+      id: c.id,
+      type: c.type,
+      title: c.type === 'TASK' && tasksMap[c.task_id] ? `نقاش مهمة: ${tasksMap[c.task_id].title}` : c.title || other.name,
+      taskId: c.task_id,
+      task: tasksMap[c.task_id] || null,
+      lastMessageAt: c.last_message_at,
+      lastMessagePreview: c.last_message_preview || '',
+      lastMessageSenderId: c.last_message_sender_id,
+      isPinned: !!c.is_pinned,
+      unreadCount: unreadMap[c.id] || 0,
+      participants: parts,
+      otherParticipant: other,
+      createdAt: c.created_at,
+    };
+  });
+
+  res.json({ conversations: result });
+});
+
+/** بدء محادثة جديدة أو فتح محادثة قائمة (فردية أو متعلقة بمهمة) */
+router.post('/chat/conversations', requireAuth, async (req, res) => {
+  if (!L.canStartChat(req.me)) return res.status(403).json({ error: 'لا تملك صلاحية بدء محادثة.' });
+
+  const type = String(req.body?.type || 'DIRECT').toUpperCase();
+  const taskId = req.body?.taskId ? String(req.body.taskId).trim() : null;
+  const recipientId = req.body?.recipientId ? String(req.body.recipientId).trim() : null;
+
+  if (type === 'TASK') {
+    if (!taskId) return res.status(400).json({ error: 'معرّف المهمة مطلوب لمحادثات المهام.' });
+    const t = await getTask(taskId);
+    if (!t || !L.canSeeTask(req.me, t)) return res.status(403).json({ error: 'لا تملك صلاحية الوصول إلى هذه المهمة.' });
+
+    // البحث عن محادثة سابقة لهذه المهمة يكون المستخدم طرفاً فيها
+    const existing = await one(
+      `SELECT c.id FROM conversations c
+       JOIN conversation_participants cp ON cp.conversation_id = c.id AND cp.user_id = $1
+       WHERE c.type = 'TASK' AND c.task_id = $2
+       LIMIT 1`,
+      [req.me.id, t.id]
+    );
+
+    if (existing) return res.json({ conversationId: existing.id });
+
+    // إنشاء محادثة جديدة للمهمة
+    const convId = 'conv-t-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+    await q(
+      `INSERT INTO conversations(id, type, title, task_id, created_by, last_message_at, last_message_preview, last_message_sender_id)
+       VALUES($1, 'TASK', $2, $3, $4, now(), 'بدء نقاش المهمة', $4)`,
+      [convId, t.title, t.id, req.me.id]
+    );
+
+    // إضافة أطراف المهمة: المستخدم الحالي + المنفذ + المنشئ + المدير إذا وجد
+    const candidateIds = [...new Set([req.me.id, t.assignee_id, t.creator_id].filter(Boolean))];
+    for (const uid of candidateIds) {
+      await q(
+        `INSERT INTO conversation_participants(conversation_id, user_id, joined_at, last_read_at, is_active)
+         VALUES($1, $2, now(), now(), true)
+         ON CONFLICT (conversation_id, user_id) DO NOTHING`,
+        [convId, uid]
+      );
+    }
+
+    return res.json({ conversationId: convId });
+  }
+
+  // محادثة مباشرة DIRECT
+  if (!recipientId) return res.status(400).json({ error: 'يرجى تحديد جهة الاتصال.' });
+  if (recipientId === req.me.id) return res.status(400).json({ error: 'لا يمكن إنشاء محادثة مع نفسك.' });
+
+  const targetUser = await one('SELECT * FROM users WHERE id=$1 AND active=true', [recipientId]);
+  if (!targetUser) return res.status(404).json({ error: 'المستخدم غير موجود أو معطّل.' });
+
+  // فحص الصلاحية والهيكل الإداري والأهلية
+  const collabRows = await all(
+    `SELECT DISTINCT assignee_id as uid FROM tasks WHERE creator_id = $1 AND assignee_id IS NOT NULL
+     UNION
+     SELECT DISTINCT creator_id as uid FROM tasks WHERE assignee_id = $1 AND creator_id IS NOT NULL`,
+    [req.me.id]
+  );
+  const collaboratorIds = collabRows.map((r) => r.uid).filter(Boolean);
+
+  if (!L.canMessageUser(req.me, targetUser, { collaboratorIds })) {
+    return res.status(403).json({ error: 'لا تملك صلاحية مراسلة هذا المستخدم وفق الهيكل الإداري والصلاحيات المعتمدة.' });
+  }
+
+  // البحث عما إذا كانت هناك محادثة مباشرة سابقة بين هذين الطرفين
+  const existingDirect = await one(
+    `SELECT c.id FROM conversations c
+     JOIN conversation_participants p1 ON p1.conversation_id = c.id AND p1.user_id = $1
+     JOIN conversation_participants p2 ON p2.conversation_id = c.id AND p2.user_id = $2
+     WHERE c.type = 'DIRECT' AND (SELECT count(*) FROM conversation_participants WHERE conversation_id = c.id) = 2
+     LIMIT 1`,
+    [req.me.id, targetUser.id]
+  );
+
+  if (existingDirect) return res.json({ conversationId: existingDirect.id });
+
+  const convId = 'conv-d-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+  await q(
+    `INSERT INTO conversations(id, type, title, created_by, last_message_at, last_message_preview, last_message_sender_id)
+     VALUES($1, 'DIRECT', $2, $3, now(), '', $3)`,
+    [convId, targetUser.name, req.me.id]
+  );
+
+  await q(
+    `INSERT INTO conversation_participants(conversation_id, user_id, joined_at, last_read_at, is_active)
+     VALUES($1, $2, now(), now(), true), ($1, $3, now(), now(), true)`,
+    [convId, req.me.id, targetUser.id]
+  );
+
+  res.json({ conversationId: convId });
+});
+
+/** جلب رسائل محادثة معينة وتحديث حالة القراءة */
+router.get('/chat/conversations/:id/messages', requireAuth, async (req, res) => {
+  const convId = req.params.id;
+  const part = await one(
+    'SELECT * FROM conversation_participants WHERE conversation_id=$1 AND user_id=$2 AND is_active=true',
+    [convId, req.me.id]
+  );
+  if (!part && req.me.role !== 'admin') {
+    return res.status(403).json({ error: 'لا تملك صلاحية الوصول إلى هذه المحادثة.' });
+  }
+
+  // تحديث وقت آخر قراءة للمستخدم
+  await q('UPDATE conversation_participants SET last_read_at = now() WHERE conversation_id=$1 AND user_id=$2', [convId, req.me.id]);
+
+  const messages = await all(
+    `SELECT m.id, m.conversation_id, m.sender_id, m.message, m.reply_to_message_id, m.is_pinned,
+            m.created_at, m.edited_at, m.deleted_at,
+            u.name as sender_name, u.role as sender_role, u.title as sender_title
+     FROM chat_messages m
+     JOIN users u ON u.id = m.sender_id
+     WHERE m.conversation_id = $1
+     ORDER BY m.created_at ASC`,
+    [convId]
+  );
+
+  const msgIds = messages.map((m) => m.id);
+  let attachmentsMap = {}, referencesMap = {};
+
+  if (msgIds.length) {
+    const attRows = await all(
+      `SELECT * FROM message_attachments WHERE message_id = ANY($1) ORDER BY id ASC`,
+      [msgIds]
+    );
+    for (const a of attRows) {
+      if (!attachmentsMap[a.message_id]) attachmentsMap[a.message_id] = [];
+      attachmentsMap[a.message_id].push({
+        id: a.id,
+        name: a.original_name,
+        size: Number(a.file_size),
+        mime: a.mime_type,
+        url: `/api/chat/attachments/${a.id}`,
+      });
+    }
+
+    const refRows = await all(
+      `SELECT * FROM message_references WHERE message_id = ANY($1) ORDER BY id ASC`,
+      [msgIds]
+    );
+    for (const r of refRows) {
+      if (!referencesMap[r.message_id]) referencesMap[r.message_id] = [];
+      referencesMap[r.message_id].push({
+        id: r.id,
+        type: r.reference_type,
+        refId: r.reference_id,
+        title: r.reference_title,
+        meta: r.reference_meta || {},
+      });
+    }
+  }
+
+  // مراجعة أوقات قراءة الأطراف الآخرين لمعرفة حالة "تمت القراءة"
+  const otherParts = await all(
+    'SELECT user_id, last_read_at FROM conversation_participants WHERE conversation_id=$1 AND user_id <> $2',
+    [convId, req.me.id]
+  );
+  const maxOtherReadAt = otherParts.length
+    ? new Date(Math.max(...otherParts.map((p) => new Date(p.last_read_at).getTime())))
+    : null;
+
+  const formatted = messages.map((m) => ({
+    id: m.id,
+    conversationId: m.conversation_id,
+    senderId: m.sender_id,
+    senderName: m.sender_name,
+    senderRole: m.sender_role,
+    senderTitle: m.sender_title,
+    message: m.deleted_at ? 'تم حذف هذه الرسالة' : m.message,
+    replyToId: m.reply_to_message_id,
+    isPinned: !!m.is_pinned,
+    isDeleted: !!m.deleted_at,
+    isRead: maxOtherReadAt ? new Date(m.created_at) <= maxOtherReadAt : false,
+    createdAt: m.created_at,
+    editedAt: m.edited_at,
+    attachments: attachmentsMap[m.id] || [],
+    references: referencesMap[m.id] || [],
+  }));
+
+  res.json({ messages: formatted });
+});
+
+/** إرسال رسالة في محادثة */
+router.post('/chat/conversations/:id/messages', requireAuth, async (req, res) => {
+  if (!L.canSendChatMessage(req.me)) return res.status(403).json({ error: 'لا تملك صلاحية إرسال الرسائل.' });
+
+  const convId = req.params.id;
+  const part = await one(
+    'SELECT * FROM conversation_participants WHERE conversation_id=$1 AND user_id=$2 AND is_active=true',
+    [convId, req.me.id]
+  );
+  if (!part && req.me.role !== 'admin') {
+    return res.status(403).json({ error: 'لا تملك صلاحية إرسال رسائل في هذه المحادثة.' });
+  }
+
+  const messageText = String(req.body?.message || '').trim();
+  const replyToId = req.body?.replyToId ? Number(req.body.replyToId) : null;
+  const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+  const references = Array.isArray(req.body?.references) ? req.body.references : [];
+
+  if (!messageText && !attachments.length && !references.length) {
+    return res.status(400).json({ error: 'لا يمكن إرسال رسالة فارغة.' });
+  }
+
+  const inserted = await one(
+    `INSERT INTO chat_messages(conversation_id, sender_id, message, reply_to_message_id, created_at)
+     VALUES($1, $2, $3, $4, now())
+     RETURNING id, created_at`,
+    [convId, req.me.id, messageText, replyToId]
+  );
+  const msgId = inserted.id;
+
+  // حفظ المرفقات
+  const savedAttachments = [];
+  for (const a of attachments) {
+    if (a.storageKey && a.originalName) {
+      const attRow = await one(
+        `INSERT INTO message_attachments(message_id, storage_key, original_name, file_size, mime_type)
+         VALUES($1, $2, $3, $4, $5) RETURNING id`,
+        [msgId, a.storageKey, a.originalName, a.fileSize || 0, a.mimeType || 'application/octet-stream']
+      );
+      savedAttachments.push({
+        id: attRow.id,
+        name: a.originalName,
+        size: a.fileSize || 0,
+        mime: a.mimeType,
+        url: `/api/chat/attachments/${attRow.id}`,
+      });
+    }
+  }
+
+  // حفظ المراجع (مهام، إجراءات)
+  const savedReferences = [];
+  for (const r of references) {
+    if (r.type && r.id) {
+      const refRow = await one(
+        `INSERT INTO message_references(message_id, reference_type, reference_id, reference_title, reference_meta)
+         VALUES($1, $2, $3, $4, $5) RETURNING id`,
+        [msgId, r.type.toUpperCase(), String(r.id), String(r.title || ''), r.meta || {}]
+      );
+      savedReferences.push({
+        id: refRow.id,
+        type: r.type.toUpperCase(),
+        refId: String(r.id),
+        title: String(r.title || ''),
+        meta: r.meta || {},
+      });
+    }
+  }
+
+  // تحديث المحادثة
+  const snippet = messageText || (attachments.length ? '📎 مرفق' : references.length ? '📌 مرجع مهمة' : '');
+  const preview = snippet.slice(0, 80) + (snippet.length > 80 ? '…' : '');
+  await q(
+    `UPDATE conversations
+     SET last_message_at = now(), last_message_preview = $1, last_message_sender_id = $2, updated_at = now()
+     WHERE id = $3`,
+    [preview, req.me.id, convId]
+  );
+
+  // تحديث قراءة المرسل
+  await q('UPDATE conversation_participants SET last_read_at = now() WHERE conversation_id=$1 AND user_id=$2', [convId, req.me.id]);
+
+  // إرسال تنبيهات للأطراف الأخرى
+  const otherParts = await all(
+    'SELECT user_id FROM conversation_participants WHERE conversation_id=$1 AND user_id <> $2 AND is_active=true',
+    [convId, req.me.id]
+  );
+  const otherUserIds = otherParts.map((p) => p.user_id);
+  if (otherUserIds.length) {
+    const conv = await one('SELECT * FROM conversations WHERE id=$1', [convId]);
+    await notify({
+      kind: 'comment',
+      taskId: conv?.task_id || null,
+      actorId: req.me.id,
+      to: otherUserIds,
+      body: `رسالة جديدة من ${req.me.name}: ${preview}`,
+    });
+  }
+
+  res.json({
+    message: {
+      id: msgId,
+      conversationId: convId,
+      senderId: req.me.id,
+      senderName: req.me.name,
+      senderRole: req.me.role,
+      senderTitle: req.me.title,
+      message: messageText,
+      replyToId,
+      isPinned: false,
+      isDeleted: false,
+      isRead: false,
+      createdAt: inserted.created_at,
+      attachments: savedAttachments,
+      references: savedReferences,
+    },
+  });
+});
+
+/** رفع ملف مرفق للمحادثة */
+router.post('/chat/upload', requireAuth, upload.array('files', 5), async (req, res) => {
+  if (!L.canAttachChatFile(req.me)) return res.status(403).json({ error: 'لا تملك صلاحية إرفاق ملفات.' });
+  const files = req.files || [];
+  if (!files.length) return res.status(400).json({ error: 'لم يُرفع أي ملف.' });
+
+  const stored = [];
+  try {
+    for (const f of files) {
+      const name = Buffer.from(f.originalname, 'latin1').toString('utf8');
+      const key = S.newKey('chat', name);
+      const buf = await fs.promises.readFile(f.path);
+      await S.save(buf, key, f.mimetype);
+      stored.push({
+        storageKey: key,
+        originalName: name,
+        fileSize: f.size,
+        mimeType: f.mimetype,
+      });
+    }
+    res.json({ files: stored });
+  } catch (e) {
+    for (const s of stored) await S.remove(s.storageKey).catch(() => {});
+    console.error('[chat-upload]', e);
+    res.status(502).json({ error: 'تعذّر حفظ المرفقات في التخزين.' });
+  } finally {
+    for (const f of files) fs.promises.unlink(f.path).catch(() => {});
+  }
+});
+
+/** تحميل مرفق رسالة بأمان */
+router.get('/chat/attachments/:aid', requireAuth, async (req, res) => {
+  const a = await one('SELECT * FROM message_attachments WHERE id=$1', [req.params.aid]);
+  if (!a) return res.status(404).json({ error: 'المرفق غير موجود.' });
+
+  const msg = await one('SELECT conversation_id FROM chat_messages WHERE id=$1', [a.message_id]);
+  if (!msg) return res.status(404).json({ error: 'الرسالة غير موجودة.' });
+
+  const part = await one(
+    'SELECT 1 FROM conversation_participants WHERE conversation_id=$1 AND user_id=$2',
+    [msg.conversation_id, req.me.id]
+  );
+  if (!part && req.me.role !== 'admin') {
+    return res.status(403).json({ error: 'لا تملك صلاحية تنزيل هذا المرفق.' });
+  }
+
+  try {
+    await S.serve(res, a.storage_key, a.original_name);
+  } catch (e) {
+    console.error('[chat-serve-attachment]', e);
+    res.status(502).json({ error: 'تعذّر جلب المرفق من التخزين.' });
+  }
+});
+
+/** تحديث حالة القراءة للمحادثة */
+router.post('/chat/conversations/:id/read', requireAuth, async (req, res) => {
+  await q('UPDATE conversation_participants SET last_read_at = now() WHERE conversation_id=$1 AND user_id=$2', [req.params.id, req.me.id]);
+  res.json({ ok: true });
+});
+
+/** تثبيت أو إلغاء تثبيت محادثة */
+router.post('/chat/conversations/:id/pin', requireAuth, async (req, res) => {
+  const part = await one('SELECT is_pinned FROM conversation_participants WHERE conversation_id=$1 AND user_id=$2', [req.params.id, req.me.id]);
+  if (!part) return res.status(404).json({ error: 'المحادثة غير موجودة.' });
+  const nextVal = !part.is_pinned;
+  await q('UPDATE conversation_participants SET is_pinned=$1 WHERE conversation_id=$2 AND user_id=$3', [nextVal, req.params.id, req.me.id]);
+  res.json({ isPinned: nextVal });
+});
+
+/** حذف رسالة (من صاحب الرسالة أو مدير النظام) */
+router.delete('/chat/messages/:mid', requireAuth, async (req, res) => {
+  const msg = await one('SELECT * FROM chat_messages WHERE id=$1', [req.params.mid]);
+  if (!msg) return res.status(404).json({ error: 'الرسالة غير موجودة.' });
+  if (msg.sender_id !== req.me.id && req.me.role !== 'admin') {
+    return res.status(403).json({ error: 'لا يمكنك حذف رسالة مرسلة من شخص آخر.' });
+  }
+  await q('UPDATE chat_messages SET deleted_at = now(), message = $1 WHERE id=$2', ['تم حذف هذه الرسالة', msg.id]);
+  res.json({ ok: true });
+});
+
 module.exports = router;
+

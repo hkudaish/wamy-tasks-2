@@ -243,7 +243,7 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
   put('dept_id', b.dept, 'القسم'); put('organization_id', b.organization, 'الإدارة'); put('role', b.role, 'الدور');
   if(b.permissions!==undefined){
     if(!b.permissions||typeof b.permissions!=='object'||Array.isArray(b.permissions))return res.status(400).json({error:'صيغة الصلاحيات غير صالحة.'});
-    const allowed=['create_self','assign_others','manage_tasks','approve_close','reassign_tasks','delete_tasks','view_reports'];
+    const allowed=['create_self','assign_others','manage_tasks','approve_close','reassign_tasks','delete_tasks','view_reports','chat_view','chat_start','chat_send_message','chat_attach_file','chat_mention_task'];
     const permissions=Object.fromEntries(Object.entries(b.permissions).filter(([k,v])=>allowed.includes(k)&&typeof v==='boolean'));
     put('permissions',permissions,'الصلاحيات');
   }
