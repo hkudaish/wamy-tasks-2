@@ -5157,15 +5157,75 @@ async function previewStructureRows(rows){
 }
 function openStructurePreview(r){
   const m=document.getElementById('modal'),s=r.summary||{};
+  const readyResults = (r.results||[]).filter(x=>x.status==='ready');
+  const readyCount = readyResults.length;
   m.innerHTML=`<div class="modal-h"><h3>معاينة استيراد الهيكل الإداري</h3><div style="flex:1"></div><button class="icon-btn" onclick="closeAll()">✕</button></div><div class="modal-b">
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"><span class="badge b-blue">إدارات: ${nfm(r.organizations||0)}</span><span class="badge b-blue">أقسام: ${nfm(r.departments||0)}</span><span class="badge b-green">جاهز: ${nfm(s.ready||0)}</span>${s.error?`<span class="badge b-red">أخطاء: ${nfm(s.error)}</span>`:''}${s.skipped?`<span class="badge b-gray">متجاوز: ${nfm(s.skipped)}</span>`:''}</div>
-    <div class="tbl-wrap" style="max-height:55vh"><table class="tbl"><thead><tr><th>#</th><th>النوع</th><th>الرمز/الرقم الوظيفي</th><th>الاسم</th><th>كلمة المرور المبدئية</th><th>النتيجة</th></tr></thead><tbody>${r.results.map(x=>`<tr><td>${x.row}</td><td>${x.entity==='organization'?'إدارة':x.entity==='department'?'قسم':x.entity==='user'?'مستخدم':'عنصر'}</td><td>${esc(x.code||'—')}</td><td>${esc(x.name||'—')}</td><td style="direction:ltr">${esc(x.password||'—')}</td><td><span class="badge ${x.status==='error'?'b-red':x.status==='skipped'?'b-gray':'b-green'}">${esc(x.message)}</span></td></tr>`).join('')}</tbody></table></div></div>
-    <div class="modal-f"><button class="btn" onclick="runStructureImport()" ${(s.ready||0)?'':'disabled'}>اعتماد الاستيراد</button><button class="btn ghost" onclick="closeAll()">إلغاء</button></div>`;
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <span class="badge b-blue">إدارات: ${nfm(r.organizations||0)}</span>
+      <span class="badge b-blue">أقسام: ${nfm(r.departments||0)}</span>
+      <span class="badge b-green">جاهز: ${nfm(s.ready||0)}</span>
+      ${s.error?`<span class="badge b-red">أخطاء: ${nfm(s.error)}</span>`:''}
+      ${s.skipped?`<span class="badge b-gray">متجاوز: ${nfm(s.skipped)}</span>`:''}
+      <div style="flex:1"></div>
+      <span id="structSelBadge" class="badge b-blue" style="font-weight:700">المحدد للاستيراد: <span id="structSelCount">${readyCount}</span> من ${readyCount}</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <span style="font-size:12px;color:var(--t2);font-weight:600">خيارات التحديد:</span>
+      <button type="button" class="btn sm ghost" onclick="toggleAllStructureRows(true)">تحديد الكل</button>
+      <button type="button" class="btn sm ghost" onclick="toggleAllStructureRows(false)">إلغاء تحديد الكل</button>
+      <button type="button" class="btn sm ghost" onclick="toggleStructureRowsByEntity('user')">المستخدمون فقط</button>
+      <button type="button" class="btn sm ghost" onclick="toggleStructureRowsByEntity('department')">الأقسام فقط</button>
+      <button type="button" class="btn sm ghost" onclick="toggleStructureRowsByEntity('organization')">الإدارات فقط</button>
+    </div>
+    <div class="tbl-wrap" style="max-height:55vh"><table class="tbl"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="selectAllStructureRows" checked onchange="toggleAllStructureRows(this.checked)" title="تحديد / إلغاء تحديد الكل"></th><th>#</th><th>النوع</th><th>الرمز/الرقم الوظيفي</th><th>الاسم</th><th>كلمة المرور المبدئية</th><th>النتيجة</th></tr></thead><tbody>${r.results.map(x=>`<tr class="${x.status==='error'?'row-error':''}">
+      <td style="text-align:center"><input type="checkbox" class="struct-row-select" data-row="${x.row}" data-entity="${x.entity||''}" ${x.status==='ready'?'checked':'disabled'} onchange="updateStructureSelectedCount()"></td>
+      <td>${x.row}</td>
+      <td>${x.entity==='organization'?'إدارة':x.entity==='department'?'قسم':x.entity==='user'?'مستخدم':'عنصر'}</td>
+      <td>${esc(x.code||'—')}</td>
+      <td>${esc(x.name||'—')}</td>
+      <td style="direction:ltr">${esc(x.password||'—')}</td>
+      <td><span class="badge ${x.status==='error'?'b-red':x.status==='skipped'?'b-gray':'b-green'}">${esc(x.message)}</span></td>
+    </tr>`).join('')}</tbody></table></div></div>
+    <div class="modal-f"><button class="btn" id="runStructureImportBtn" onclick="runStructureImport()" ${readyCount?'':'disabled'}>اعتماد الاستيراد</button><button class="btn ghost" onclick="closeAll()">إلغاء</button></div>`;
   document.getElementById('overlay').classList.add('open');m.classList.add('open');
+  updateStructureSelectedCount();
+}
+function toggleAllStructureRows(checked){
+  document.querySelectorAll('.struct-row-select:not(:disabled)').forEach(cb=>{cb.checked=!!checked;});
+  updateStructureSelectedCount();
+}
+function toggleStructureRowsByEntity(entity){
+  document.querySelectorAll('.struct-row-select:not(:disabled)').forEach(cb=>{
+    cb.checked=(cb.dataset.entity===entity);
+  });
+  updateStructureSelectedCount();
+}
+function updateStructureSelectedCount(){
+  const enabledCbs=[...document.querySelectorAll('.struct-row-select:not(:disabled)')];
+  const checkedCbs=[...document.querySelectorAll('.struct-row-select:checked')];
+  const count=checkedCbs.length, total=enabledCbs.length;
+  const countEl=document.getElementById('structSelCount');
+  if(countEl)countEl.textContent=count;
+  const master=document.getElementById('selectAllStructureRows');
+  if(master){
+    master.checked=(total>0&&count===total);
+    master.indeterminate=(count>0&&count<total);
+  }
+  const btn=document.getElementById('runStructureImportBtn');
+  if(btn)btn.disabled=(count===0);
 }
 async function runStructureImport(){
-  if(!confirm('سيتم إنشاء الإدارات والأقسام وحسابات المستخدمين الجاهزة. متابعة؟'))return;
-  const r=await run(()=>API.post('/admin/structure/import',{rows:STRUCTURE_IMPORT,dryRun:false}),'اكتمل استيراد الهيكل');if(!r)return;
+  const selectedCbs=[...document.querySelectorAll('.struct-row-select:checked')];
+  const selectedRows=selectedCbs.map(cb=>Number(cb.dataset.row));
+  if(!selectedRows.length){
+    showToast('يرجى تحديد عنصر واحد على الأقل للاستيراد.','warn');
+    return;
+  }
+  const msg=selectedRows.length===STRUCTURE_IMPORT.length
+    ? 'سيتم إنشاء الإدارات والأقسام وحسابات المستخدمين المحددة. متابعة؟'
+    : `سيتم استيراد ${selectedRows.length} عنصر/مستخدم محدد فقط من أصل ${STRUCTURE_IMPORT.length}. متابعة؟`;
+  if(!confirm(msg))return;
+  const r=await run(()=>API.post('/admin/structure/import',{rows:STRUCTURE_IMPORT,selectedRows,dryRun:false}),'اكتمل استيراد العناصر المحددة من الهيكل');if(!r)return;
   const b=await API.get('/bootstrap');ORGANIZATIONS=b.organizations;DEPTS=b.depts;USERS=b.users;HIDDEN_USERS=b.hiddenUsers||[];HIDDEN_DEPTS=b.hiddenDepts||[];STRUCTURE_PEOPLE=b.structurePeople||[];closeAll();renderNav();render();
 }
 const RESET_SECTION_OPTIONS=[

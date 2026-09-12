@@ -554,8 +554,10 @@ router.post('/structure/parse', requireAdmin, planUpload.single('file'), async (
 router.post('/structure/import', requireAdmin, async (req,res) => {
   const rows=Array.isArray(req.body?.rows)?req.body.rows.slice(0,1000):[];
   const dryRun=req.body?.dryRun!==false;
+  const selectedRowNumbers=Array.isArray(req.body?.selectedRows)?new Set(req.body.selectedRows.map(Number)):null;
+  const isSelected=(rowNum)=>!selectedRowNumbers||selectedRowNumbers.has(rowNum);
   if(!rows.length)return res.status(400).json({error:'لا توجد صفوف للاستيراد.'});
-  if(rows.some(x=>x.entity)) return importTemplateStructure(req,res,rows,dryRun);
+  if(rows.some(x=>x.entity)) return importTemplateStructure(req,res,rows,dryRun,selectedRowNumbers);
   const cfg=await getSetting('cfg'), domains=cfg.domains.map(x=>x.toLowerCase());
   const orgNames=new Set(), deptNames=new Set(), emails=new Set(), results=[];
   for(const [i,x] of rows.entries()){
@@ -578,25 +580,33 @@ router.post('/structure/import', requireAdmin, async (req,res) => {
     emails.add(email);results.push({...result,status:'ready',message:'مستخدم جاهز',password});
   }
   if(!dryRun){
+    const selectedResults = results.filter(r=>r.status==='ready'&&r.name&&isSelected(r.row));
+    const selectedOrgNames = new Set(selectedResults.map(r=>r.organization).filter(Boolean));
+    const selectedDeptKeys = new Set(selectedResults.map(r=>r.organization&&r.department?r.organization+'\u0000'+r.department:null).filter(Boolean));
     await tx(async c=>{
       const orgMap=new Map();
-      for(const name of orgNames){let r=(await c.query('SELECT id FROM organizations WHERE lower(name)=lower($1)',[name])).rows[0];if(!r){const id='o'+Date.now().toString(36)+crypto.randomInt(1e5).toString(36);await c.query('INSERT INTO organizations(id,name) VALUES($1,$2)',[id,name]);r={id};}orgMap.set(name,r.id);}
+      for(const name of selectedOrgNames){let r=(await c.query('SELECT id FROM organizations WHERE lower(name)=lower($1)',[name])).rows[0];if(!r){const id='o'+Date.now().toString(36)+crypto.randomInt(1e5).toString(36);await c.query('INSERT INTO organizations(id,name) VALUES($1,$2)',[id,name]);r={id};}orgMap.set(name,r.id);}
       const deptMap=new Map();
-      for(const key of deptNames){const [orgName,deptName]=key.split('\u0000'),org=orgMap.get(orgName);let r=(await c.query('SELECT id FROM departments WHERE organization_id=$1 AND lower(name)=lower($2)',[org,deptName])).rows[0];if(!r){const id='d'+Date.now().toString(36)+crypto.randomInt(1e5).toString(36);await c.query('INSERT INTO departments(id,name,organization_id) VALUES($1,$2,$3)',[id,deptName,org]);r={id};}deptMap.set(key,r.id);}
-      for(const x of results.filter(r=>r.status==='ready'&&r.name)){
+      for(const key of selectedDeptKeys){const [orgName,deptName]=key.split('\u0000'),org=orgMap.get(orgName);let r=(await c.query('SELECT id FROM departments WHERE organization_id=$1 AND lower(name)=lower($2)',[org,deptName])).rows[0];if(!r){const id='d'+Date.now().toString(36)+crypto.randomInt(1e5).toString(36);await c.query('INSERT INTO departments(id,name,organization_id) VALUES($1,$2,$3)',[id,deptName,org]);r={id};}deptMap.set(key,r.id);}
+      for(const x of selectedResults){
         const id='u'+Date.now().toString(36)+crypto.randomInt(1e6).toString(36),org=orgMap.get(x.organization),dept=x.department?deptMap.get(x.organization+'\u0000'+x.department):null;
         await c.query(`INSERT INTO users(id,name,email,phone,password_hash,dept_id,organization_id,role,title,must_change_pw) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,true)`,[id,x.name,x.email,normPhone(rows[x.row-1].phone).phone||'',await hash(x.password),dept,org,x.role,String(rows[x.row-1].title||'')]);
         x.status='created';x.id=id;
       }
     });
-    await adminLog(req.me.id,'admin',`استورد هيكلًا إداريًا: ${orgNames.size} إدارة، ${deptNames.size} قسم، ${results.filter(x=>x.status==='created').length} مستخدم`);
+    results.forEach(x=>{
+      if(isSelected(x.row)&&x.status==='ready') x.status='created';
+      else if(!isSelected(x.row)) { x.status='skipped'; x.message='تم تخطيه (غير محدد للاستيراد)'; }
+    });
+    await adminLog(req.me.id,'admin',`استورد هيكلًا إداريًا: ${selectedOrgNames.size} إدارة، ${selectedDeptKeys.size} قسم، ${selectedResults.length} مستخدم`);
   }
   const summary=results.reduce((m,x)=>((m[x.status]=(m[x.status]||0)+1),m),{});
   res.json({dryRun,summary,results,organizations:orgNames.size,departments:deptNames.size});
 });
 
-async function importTemplateStructure(req,res,rows,dryRun){
+async function importTemplateStructure(req,res,rows,dryRun,selectedRowNumbers=null){
   const orgRows=rows.filter(x=>x.entity==='organization'),deptRows=rows.filter(x=>x.entity==='department'),userRows=rows.filter(x=>x.entity==='user');
+  const isSelected=(rowNum)=>!selectedRowNumbers||selectedRowNumbers.has(rowNum);
   const cfg=await getSetting('cfg'),domains=cfg.domains.map(x=>x.toLowerCase());
   const [dbOrgs,dbDepts,dbUsers]=await Promise.all([
     all('SELECT code FROM organizations WHERE code IS NOT NULL'),all('SELECT organization_id,code FROM departments WHERE code IS NOT NULL'),
@@ -625,19 +635,58 @@ async function importTemplateStructure(req,res,rows,dryRun){
     if(x.managerEmployeeNo){const m=userMap.get(x.managerEmployeeNo),mr=m&&normalizeStructureRole(m),mp=m&&normalizeStructurePlacement(m,mr);if(!m)e.push('المدير المباشر غير موجود');else if(m.employeeNo===x.employeeNo)e.push('لا يمكن أن يكون المستخدم مدير نفسه');else if(!placement.globalPerson&&mp.organizationCode!==placement.organizationCode)e.push('المدير المباشر يتبع إدارة أخرى');else if(role==='employee'&&!placement.globalPerson&&(mr!=='manager'||mp.departmentCode!==placement.departmentCode))e.push('المدير المباشر للموظف يجب أن يكون رئيس قسمه');else if(role==='manager'&&mr!=='director')e.push('المدير المباشر لرئيس القسم يجب أن يكون مدير الإدارة');}else if(!['director','secretary_general','assistant_secretary_general'].includes(role)&&!placement.globalPerson)e.push('المدير المباشر مطلوب');
     const password=String(x.password||'').trim()||genPassword();const bad=validatePassword(password);if(bad)e.push(bad);x.password=password;add(x,e,password);
   }
-  const errors=results.filter(x=>x.status==='error').length;
-  if(!dryRun&&errors)return res.status(409).json({error:`لم يتم الاستيراد. صحح ${errors} خطأ أولًا؛ العملية لم تُنشئ أي بيانات.`,dryRun:true,summary:{error:errors,ready:results.length-errors},results,organizations:orgRows.length,departments:deptRows.length,users:userRows.length});
+  const selectedResults=results.filter(x=>isSelected(x.row));
+  const errors=selectedResults.filter(x=>x.status==='error').length;
+  if(!dryRun&&errors)return res.status(409).json({error:`لم يتم الاستيراد. صحح ${errors} خطأ في العناصر المحددة أولًا؛ العملية لم تُنشئ أي بيانات.`,dryRun:true,summary:{error:errors,ready:selectedResults.length-errors},results,organizations:orgRows.length,departments:deptRows.length,users:userRows.length});
   if(!dryRun){
+    const toInsertOrgs = orgRows.filter((x, i) => isSelected(i + 1));
+    const toInsertDepts = deptRows.filter((x, i) => isSelected(orgRows.length + i + 1));
+    const toInsertUsers = userRows.filter((x, i) => isSelected(orgRows.length + deptRows.length + i + 1));
     await tx(async c=>{
-      const orgIds=new Map(),deptIds=new Map(),userIds=new Map();
-      for(const x of orgRows){const id='o'+Date.now().toString(36)+crypto.randomInt(1e6).toString(36);await c.query('INSERT INTO organizations(id,code,name) VALUES($1,$2,$3)',[id,x.code,x.name]);orgIds.set(x.code,id);}
-      for(const x of deptRows){const id='d'+Date.now().toString(36)+crypto.randomInt(1e6).toString(36);await c.query('INSERT INTO departments(id,code,name,organization_id) VALUES($1,$2,$3,$4)',[id,x.code,x.name,orgIds.get(x.organizationCode)]);deptIds.set(x.organizationCode+'\0'+x.code,id);}
-      for(const x of userRows){const id='u'+Date.now().toString(36)+crypto.randomInt(1e7).toString(36);await c.query(`INSERT INTO users(id,employee_no,name,email,phone,password_hash,dept_id,organization_id,role,title,active,must_change_pw) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true)`,[id,x.employeeNo,x.name,x.email.toLowerCase(),x.phoneNormalized,await hash(x.password),x.departmentCodeNormalized?deptIds.get(x.organizationCodeNormalized+'\0'+x.departmentCodeNormalized):null,x.organizationCodeNormalized?orgIds.get(x.organizationCodeNormalized):null,x.roleNormalized,x.title||'',!/^غير\s*نشط$/.test(x.active||'')]);userIds.set(x.employeeNo,id);}
-      for(const x of userRows)if(x.managerEmployeeNo)await c.query('UPDATE users SET manager_id=$1 WHERE id=$2',[userIds.get(x.managerEmployeeNo),userIds.get(x.employeeNo)]);
-      for(const x of orgRows)await c.query('UPDATE organizations SET director_id=$1 WHERE id=$2',[userIds.get(x.directorEmployeeNo),orgIds.get(x.code)]);
-      for(const x of deptRows)await c.query('UPDATE departments SET head_id=$1 WHERE id=$2',[userIds.get(x.headEmployeeNo),deptIds.get(x.organizationCode+'\0'+x.code)]);
+      const [existingOrgs, existingDepts, existingUsers] = await Promise.all([
+        c.query('SELECT id, code, name FROM organizations WHERE code IS NOT NULL'),
+        c.query('SELECT d.id, d.code, o.code as org_code FROM departments d JOIN organizations o ON d.organization_id = o.id WHERE d.code IS NOT NULL'),
+        c.query('SELECT id, employee_no FROM users WHERE employee_no IS NOT NULL')
+      ]);
+      const orgIds = new Map(existingOrgs.rows.map(o => [o.code, o.id]));
+      const deptIds = new Map(existingDepts.rows.map(d => [d.org_code + '\0' + d.code, d.id]));
+      const userIds = new Map(existingUsers.rows.map(u => [u.employee_no, u.id]));
+
+      for(const x of toInsertOrgs){
+        if (!orgIds.has(x.code)) {
+          const id='o'+Date.now().toString(36)+crypto.randomInt(1e6).toString(36);
+          await c.query('INSERT INTO organizations(id,code,name) VALUES($1,$2,$3)',[id,x.code,x.name]);
+          orgIds.set(x.code,id);
+        }
+      }
+      for(const x of toInsertDepts){
+        const k=x.organizationCode+'\0'+x.code;
+        if (!deptIds.has(k)) {
+          const id='d'+Date.now().toString(36)+crypto.randomInt(1e6).toString(36);
+          await c.query('INSERT INTO departments(id,code,name,organization_id) VALUES($1,$2,$3,$4)',[id,x.code,x.name,orgIds.get(x.organizationCode)]);
+          deptIds.set(k,id);
+        }
+      }
+      for(const x of toInsertUsers){
+        if (!userIds.has(x.employeeNo)) {
+          const id='u'+Date.now().toString(36)+crypto.randomInt(1e7).toString(36);
+          await c.query(`INSERT INTO users(id,employee_no,name,email,phone,password_hash,dept_id,organization_id,role,title,active,must_change_pw) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true)`,[id,x.employeeNo,x.name,x.email.toLowerCase(),x.phoneNormalized,await hash(x.password),x.departmentCodeNormalized?deptIds.get(x.organizationCodeNormalized+'\0'+x.departmentCodeNormalized):null,x.organizationCodeNormalized?orgIds.get(x.organizationCodeNormalized):null,x.roleNormalized,x.title||'',!/^غير\s*نشط$/.test(x.active||'')]);
+          userIds.set(x.employeeNo,id);
+        }
+      }
+      for(const x of toInsertUsers)if(x.managerEmployeeNo&&userIds.has(x.managerEmployeeNo)&&userIds.has(x.employeeNo))await c.query('UPDATE users SET manager_id=$1 WHERE id=$2',[userIds.get(x.managerEmployeeNo),userIds.get(x.employeeNo)]);
+      for(const x of toInsertOrgs)if(x.directorEmployeeNo&&userIds.has(x.directorEmployeeNo)&&orgIds.has(x.code))await c.query('UPDATE organizations SET director_id=$1 WHERE id=$2',[userIds.get(x.directorEmployeeNo),orgIds.get(x.code)]);
+      for(const x of toInsertDepts)if(x.headEmployeeNo&&userIds.has(x.headEmployeeNo)&&deptIds.has(x.organizationCode+'\0'+x.code))await c.query('UPDATE departments SET head_id=$1 WHERE id=$2',[userIds.get(x.headEmployeeNo),deptIds.get(x.organizationCode+'\0'+x.code)]);
     });
-    results.forEach(x=>x.status='created');await adminLog(req.me.id,'admin',`استورد القالب المعتمد: ${orgRows.length} إدارة، ${deptRows.length} قسم، ${userRows.length} مستخدم`);
+    results.forEach(x=>{
+      if(isSelected(x.row)) {
+        if(x.status==='ready') x.status='created';
+      } else {
+        x.status='skipped';
+        x.message='تم تخطيه (غير محدد للاستيراد)';
+      }
+    });
+    await adminLog(req.me.id,'admin',`استورد عناصر من الهيكل: ${toInsertOrgs.length} إدارة، ${toInsertDepts.length} قسم، ${toInsertUsers.length} مستخدم`);
   }
   const summary=results.reduce((m,x)=>((m[x.status]=(m[x.status]||0)+1),m),{});
   return res.json({dryRun,summary,results,organizations:orgRows.length,departments:deptRows.length,users:userRows.length});
