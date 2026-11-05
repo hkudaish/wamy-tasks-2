@@ -9,6 +9,7 @@ const L = require('./logic');
 const { notify } = require('./mailer');
 const { requireAuth } = require('./auth');
 const S = require('./storage');
+const { IS_NETLIFY } = require('./platform');
 
 const router = express.Router();
 /* المرفقات تُخزَّن على القرص عبر server/storage.js.
@@ -17,7 +18,7 @@ const router = express.Router();
 const TMP_DIR = path.join(os.tmpdir(), 'wamy-uploads');
 fs.mkdirSync(TMP_DIR, { recursive: true });
 
-const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 20);
+const MAX_UPLOAD_MB = Math.min(Number(process.env.MAX_UPLOAD_MB || 20), IS_NETLIFY ? 5 : Infinity);
 const ALLOWED_MIME = /^(image\/(png|jpe?g|gif|webp|svg\+xml)|application\/(pdf|zip|msword|vnd\.|octet-stream)|text\/(plain|csv))/;
 const upload = multer({
   storage: multer.diskStorage({
@@ -1665,4 +1666,3 @@ router.delete('/chat/messages/:mid', requireAuth, async (req, res) => {
 });
 
 module.exports = router;
-

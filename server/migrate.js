@@ -5,7 +5,7 @@ const path = require('path');
 const { pool } = require('./db');
 
 (async () => {
-  const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+  const sql = fs.readFileSync(path.join(__dirname, '..', 'netlify', 'database', 'migrations', '0001_wamy_schema.sql'), 'utf8');
   try {
     await pool.query(sql);
     console.log('✔ تم إنشاء/تحديث مخطط قاعدة البيانات بنجاح.');

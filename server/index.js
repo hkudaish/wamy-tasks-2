@@ -81,29 +81,29 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'حدث خطأ غير متوقع في الخادم.' });
 });
 
-const PORT = Number(process.env.PORT || 3000);
-const server = app.listen(PORT, async () => {
-  console.log(`\n  نظام إدارة ومتابعة المهام — وامي`);
-  console.log(`  يعمل على المنفذ ${PORT}`);
-  /* لا نُسقط العملية إن تعذّرت القاعدة عند الإقلاع: الخادم يبقى مستمعًا
-     و/api/health يرجع 503 فيظهر السبب في فحص الصحة بدل حلقة انهيار صامتة. */
-  try {
-    const cfg = await getSetting('cfg');
-    console.log(`  نطاق البريد المعتمد: ${cfg.domains.map((d) => '@' + d).join('، ')}`);
-  } catch (e) {
-    console.error(`  تعذّر قراءة الإعدادات من قاعدة البيانات: ${e.message}`);
-    console.error('  الخادم يعمل لكن /api/health سيرجع 503 حتى يُصلح الاتصال.');
-  }
-  console.log(`  البريد الإلكتروني: ${process.env.SMTP_HOST ? 'مفعّل (' + process.env.SMTP_HOST + ')' : 'غير مفعّل'}\n`);
-  try { startScheduler(); } catch (e) { console.error('  تعذّر تشغيل المجدول:', e.message); }
-});
+if (require.main === module) {
+  const PORT = Number(process.env.PORT || 3000);
+  const server = app.listen(PORT, async () => {
+    console.log(`\n  نظام إدارة ومتابعة المهام — وامي`);
+    console.log(`  يعمل على المنفذ ${PORT}`);
+    try {
+      const cfg = await getSetting('cfg');
+      console.log(`  نطاق البريد المعتمد: ${cfg.domains.map((d) => '@' + d).join('، ')}`);
+    } catch (e) {
+      console.error(`  تعذّر قراءة الإعدادات من قاعدة البيانات: ${e.message}`);
+      console.error('  الخادم يعمل لكن /api/health سيرجع 503 حتى يُصلح الاتصال.');
+    }
+    console.log(`  البريد الإلكتروني: ${process.env.SMTP_HOST ? 'مفعّل (' + process.env.SMTP_HOST + ')' : 'غير مفعّل'}\n`);
+    try { startScheduler(); } catch (e) { console.error('  تعذّر تشغيل المجدول:', e.message); }
+  });
 
-const shutdown = (sig) => {
-  console.log(`\n[${sig}] إيقاف الخادم…`);
-  server.close(() => pool.end().then(() => process.exit(0)));
-  setTimeout(() => process.exit(1), 10000).unref();
-};
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+  const shutdown = (sig) => {
+    console.log(`\n[${sig}] إيقاف الخادم…`);
+    server.close(() => pool.end().then(() => process.exit(0)));
+    setTimeout(() => process.exit(1), 10000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
 
 module.exports = app;

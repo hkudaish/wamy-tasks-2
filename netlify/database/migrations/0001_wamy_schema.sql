@@ -1,6 +1,6 @@
 -- ============================================================
 -- نظام إدارة ومتابعة المهام — الندوة العالمية للشباب الإسلامي
--- مخطط قاعدة البيانات (PostgreSQL 14+)
+-- Initial application schema (PostgreSQL 14+)
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS organizations (
@@ -460,4 +460,3 @@ CREATE TABLE IF NOT EXISTS message_references (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_msg_ref_msg ON message_references(message_id);
-

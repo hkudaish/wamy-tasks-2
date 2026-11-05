@@ -7,3 +7,6 @@ pass.txt
 .runtime/
 *.dump
 *.xlsx
+
+# Local Netlify folder
+.netlify

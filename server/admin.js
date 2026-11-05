@@ -8,6 +8,7 @@ const { requireAuth, requireAdmin, hash, validatePassword, verify } = require('.
 const { verifyTransport, notify } = require('./mailer');
 const { parseXlsx } = require('./xlsx');
 const { buildXlsx } = require('./xlsx-export');
+const { IS_NETLIFY } = require('./platform');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -336,7 +337,10 @@ router.post('/structure/people/:id/create-account', requireAdmin, async(req,res)
    استيراد الخطة السنوية وتحويلها إلى مهام
    ============================================================ */
 const multer = require('multer');
-const planUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
+const planUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: (IS_NETLIFY ? 5 : 25) * 1024 * 1024, files: 1 },
+});
 
 /* ---------- استيراد الهيكل الإداري من Excel ---------- */
 const HKEY = {
@@ -1672,6 +1676,9 @@ router.get('/mail/test', requireAdmin, async (_req, res) => res.json(await verif
 
 /** نسخة احتياطية فورية عبر pg_dump — تُنزَّل مباشرة */
 router.get('/backup', requireAdmin, async (req, res) => {
+  if (IS_NETLIFY) {
+    return res.status(501).json({ error: 'استخدم لقطات قاعدة البيانات من لوحة Netlify لإنشاء نسخة كاملة.' });
+  }
   const url = process.env.DATABASE_URL;
   if (!url) return res.status(500).json({ error: 'DATABASE_URL غير مضبوط.' });
   const name = `wamy-tasks-backup-${new Date().toISOString().slice(0, 10)}.sql`;

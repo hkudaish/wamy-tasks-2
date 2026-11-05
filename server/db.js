@@ -1,15 +1,22 @@
 'use strict';
 require('dotenv').config();
 const { Pool } = require('pg');
+const { IS_NETLIFY } = require('./platform');
 
-if (!process.env.DATABASE_URL) {
-  console.error('[db] متغيّر DATABASE_URL غير مضبوط. بدونه يحاول الاتصال بـ localhost:5432 ويفشل.');
+const connectionString = process.env.DATABASE_URL || process.env.NETLIFY_DB_URL;
+
+if (!connectionString && IS_NETLIFY) {
+  throw new Error('[db] Netlify runtime requires DATABASE_URL or NETLIFY_DB_URL with writable access.');
+}
+
+if (!connectionString) {
+  console.error('[db] متغيّر DATABASE_URL أو NETLIFY_DB_URL غير مضبوط.');
   console.error('[db] اضبطه في بيئة التشغيل، مثال: postgresql://user:pass@host:6543/postgres');
 }
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  max: Number(process.env.PG_POOL_MAX || 10),
+  connectionString,
+  max: Number(process.env.PG_POOL_MAX || (IS_NETLIFY ? 5 : 10)),
   idleTimeoutMillis: 30000,
   ssl: process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false,
 });

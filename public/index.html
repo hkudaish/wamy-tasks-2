@@ -3177,30 +3177,32 @@ function cancelChatReply() {
 }
 
 async function handleChatFileUpload(input) {
-  const files = input.files;
+  const files = [...input.files];
   if (!files || !files.length) return;
-  const fd = new FormData();
-  for (let i = 0; i < files.length; i++) {
-    fd.append('files', files[i]);
-  }
 
   toast('يجري رفع المرفقات…');
   try {
-    const r = await fetch('/api/chat/upload', {
-      method: 'POST',
-      credentials: 'same-origin',
-      body: fd,
-    });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({ error: 'فشل الرفع' }));
-      throw new Error(err.error || 'فشل رفع الملفات');
+    const uploaded = [];
+    for (const file of files) {
+      const fd = new FormData();
+      fd.append('files', file);
+      const r = await fetch('/api/chat/upload', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd,
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ error: 'فشل الرفع' }));
+        throw new Error(err.error || 'فشل رفع الملفات');
+      }
+      const res = await r.json();
+      uploaded.push(...(res?.files || []));
     }
-    const res = await r.json();
-    if (res?.files) {
-      CHAT_ATTACHMENTS.push(...res.files);
+    if (uploaded.length) {
+      CHAT_ATTACHMENTS.push(...uploaded);
       const mainEl = document.getElementById('msgMainPanel');
       if (mainEl) mainEl.innerHTML = renderChatMainHtml();
-      toast('تم إرفاق الملفات بنجاح');
+      toast(`تم إرفاق ${uploaded.length} ملف`);
     }
   } catch (e) {
     toast(e.message, 'bad');
@@ -4171,9 +4173,9 @@ function vSet(){
       <div class="set-row"><span style="flex:1">النسخ الاحتياطي الدوري</span>
         <span class="t-meta">يُجدول على الخادم عبر cron — راجع دليل النشر</span></div>
       <p style="font-size:12px;color:var(--muted);margin:12px 0">تُحفظ كل عملية فور تنفيذها في قاعدة البيانات، ويُسجَّل منفّذها في سجل النشاط.
-      زر التصدير أدناه ينشئ نسخة كاملة فورية (pg_dump) تُنزَّل على جهازك، ولا يُغني عن النسخ الاحتياطي المجدول.</p>
+      للخوادم التقليدية تتوفر نسخة SQL فورية؛ على Netlify تُدار النسخ الكاملة من لقطات قاعدة البيانات في لوحة التحكم.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn sm" onclick="backupJSON()">⤓ نسخة احتياطية فورية (SQL)</button>
+        <button class="btn sm" onclick="backupJSON()">⤓ نسخة SQL فورية (للخادم التقليدي)</button>
         <button class="btn ghost sm" onclick="exportCSV(TASKS)">⤓ تصدير كل المهام CSV</button>
         <a class="btn ghost sm" href="/api/admin/structure/export.xlsx">⤓ نسخة الهيكل Excel</a>
         <a class="btn ghost sm" href="/api/admin/structure/export.json">⤓ نسخة الهيكل JSON</a>
@@ -5275,7 +5277,24 @@ async function runSystemReset(){
   const b=await API.get('/bootstrap');ORGANIZATIONS=b.organizations;DEPTS=b.depts;USERS=b.users;HIDDEN_USERS=b.hiddenUsers||[];HIDDEN_DEPTS=b.hiddenDepts||[];TASKS=[];closeAll();renderNav();go('set');
 }
 function restoreJSON() { toast('الاستعادة تتم من نسخة قاعدة البيانات عبر psql — راجع دليل النشر.'); }
-function backupJSON() { window.location = '/api/admin/backup'; toast('يجري تجهيز النسخة الاحتياطية…'); }
+async function backupJSON() {
+  try {
+    const response = await fetch('/api/admin/backup', { credentials: 'same-origin' });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || 'تعذّر إنشاء النسخة الاحتياطية.');
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'wamy-tasks-backup.sql';
+    link.click();
+    URL.revokeObjectURL(url);
+    toast('تم تنزيل النسخة الاحتياطية');
+  } catch (error) {
+    toast(error.message, 'bad');
+  }
+}
 function notify() {}
 function logAdd() {}
 function spawnRecur() { return null; }
@@ -5453,10 +5472,13 @@ async function t_delSub(i) {
 }
 async function uploadAttach(inp) {
   const files = [...inp.files]; if (!files.length) return;
-  const fd = new FormData(); files.forEach((f) => fd.append('files', f));
   inp.value = '';
-  const r = await run(() => API.form(`/tasks/${CUR.id}/attachments`, fd), 'أُضيفت المرفقات');
-  if (r) upsertTask(r.task);
+  for (const file of files) {
+    const fd = new FormData(); fd.append('files', file);
+    const r = await run(() => API.form(`/tasks/${CUR.id}/attachments`, fd), 'أُضيف المرفق');
+    if (!r) break;
+    upsertTask(r.task);
+  }
 }
 async function delAttach(i) {
   const a = CUR.attachments[i]; if (!a) return;

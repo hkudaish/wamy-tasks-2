@@ -8,6 +8,7 @@ const root = path.resolve(__dirname, '..');
 const jsFiles = [
   ...fs.readdirSync(path.join(root, 'server')).filter((name) => name.endsWith('.js')).map((name) => path.join(root, 'server', name)),
   ...fs.readdirSync(path.join(root, 'scripts')).filter((name) => name.endsWith('.js')).map((name) => path.join(root, 'scripts', name)),
+  ...fs.readdirSync(path.join(root, 'netlify', 'functions')).filter((name) => name.endsWith('.js')).map((name) => path.join(root, 'netlify', 'functions', name)),
 ];
 
 for (const file of jsFiles) {
