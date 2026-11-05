@@ -966,10 +966,10 @@ html[data-theme="dark"] .person-card{background:var(--surface);border-color:var(
 html[data-theme="dark"] .person-card:hover{border-color:var(--accent);background:var(--surface-2)}
 html[data-theme="dark"] .person-card.sel{border-color:var(--accent);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--accent)}
 .person-card .pc-h{display:flex;align-items:center;gap:9px;min-width:0}
-.person-card .pc-name{font-size:12.8px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.person-card .pc-name{font-size:12.8px;font-weight:700;white-space:normal;overflow-wrap:anywhere;line-height:1.45;color:var(--text)}
 .person-card .pc-role{font-size:10.5px;color:var(--brand);font-weight:600}
 html[data-theme="dark"] .person-card .pc-role{color:var(--accent)}
-.person-card .pc-meta{font-size:11px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.person-card .pc-meta{font-size:11px;color:var(--muted);margin-top:3px;white-space:normal;overflow-wrap:anywhere;line-height:1.5}
 .person-card .pc-check{width:19px;height:19px;flex:none;border-radius:50%;border:1px solid var(--border);display:grid;place-items:center;font-size:11px;color:transparent}
 .person-card.sel .pc-check{background:var(--brand);border-color:var(--brand);color:#ffffff}
 html[data-theme="dark"] .person-card.sel .pc-check{background:var(--accent);border-color:var(--accent);color:#0f172a}
@@ -5565,7 +5565,7 @@ function wzCanEditDue() { return hasUserPermission(ME, 'manage_tasks'); }
 
 function openTaskWizard() {
   WZ = {
-    step: 1, people: assignableUsers(), assignees: [], title: '', desc: '',
+    step: 1, people: assignableUsers(), assignees: [], q: '', title: '', desc: '',
     start: iso(TODAY), est: 5, durationUnit: 'day', due: D(5), pri: 'medium',
     cat: (CATEGORIES.find(c => c.id === 'admin') || CATEGORIES[0] || {}).id || 'admin',
   };
@@ -5616,6 +5616,23 @@ function wzCalcDue() {
   if (s) document.getElementById('wzDue').value = taskDurationDue(s, e, unit);
 }
 
+function wzFilteredPeople() {
+  const terms = structNorm(WZ.q || '').split(/\s+/).filter(Boolean);
+  if (!terms.length) return WZ.people;
+  return WZ.people.filter(u => {
+    const hay = structNorm(`${u.name || ''} ${u.employeeNo || ''} ${u.title || ''} ${ROLE_AR[u.role] || ''} ${wzOrgName(u.organization)} ${u.dept ? dname(u.dept) : ''}`);
+    return terms.every(t => hay.includes(t));
+  });
+}
+function wzPaintPeople() {
+  const grid = document.getElementById('wzGrid'), cnt = document.getElementById('wzCount');
+  if (!grid || !cnt) return;
+  const list = wzFilteredPeople(), filtered = list.length !== WZ.people.length;
+  cnt.textContent = `${filtered ? nfm(list.length) + ' من ' + nfm(WZ.people.length) : nfm(WZ.people.length)} ضمن نطاق صلاحياتك · المحدد: ${nfm(WZ.assignees.length)}`;
+  grid.innerHTML = list.length ? list.map(wzPersonCard).join('') : '<div class="empty" style="grid-column:1/-1">لا توجد نتائج مطابقة للبحث.</div>';
+}
+function wzSearch(v) { WZ.q = v; wzPaintPeople(); }
+
 function wzPersonCard(u) {
   const sel = WZ.assignees.includes(u.id);
   return `<div class="person-card ${sel ? 'sel' : ''}" onclick="wzToggle('${u.id}')">
@@ -5638,8 +5655,9 @@ function wzBody() {
       <div class="wz-sub">${morn ? 'إنه صباح جميل!' : 'إنه مساء جميل!'}</div>
       <div class="wz-q">لمن ترغب في إسناد هذه المهمة ${hon} <span class="wz-person">${fn}</span>؟</div></div>
       ${WZ.people.length
-        ? `<div class="wz-count">${nfm(WZ.people.length)} ضمن نطاق صلاحياتك · المحدد: ${nfm(WZ.assignees.length)}</div>
-           <div class="people-grid">${WZ.people.map(wzPersonCard).join('')}</div>`
+        ? `<input class="inp search" id="wzQ" type="search" autocomplete="off" style="width:100%;margin-bottom:10px" placeholder="🔎 ابحث بالاسم أو الرقم الوظيفي أو المسمى أو الإدارة أو القسم…" value="${esc(WZ.q)}" oninput="wzSearch(this.value)">
+           <div class="wz-count" id="wzCount"></div>
+           <div class="people-grid" id="wzGrid"></div>`
         : `<div class="empty">لا يوجد أشخاص يمكنك الإسناد إليهم وفق صلاحياتك وموقعك في الهيكل الإداري.</div>`}`;
   }
   if (WZ.step === 2) {
@@ -5703,6 +5721,7 @@ function wzRender() {
       <div style="flex:1"></div><button class="icon-btn" onclick="closeAll()">✕</button></div>
     <div class="modal-b"><div class="wz-steps">${steps}</div>${wzBody()}</div>
     <div class="modal-f">${wzFoot()}</div>`;
+  if (WZ.step === 1) wzPaintPeople();
   if (WZ.step === 2) setTimeout(() => { const el = document.getElementById('wzTitle'); if (el) el.focus(); }, 40);
 }
 
