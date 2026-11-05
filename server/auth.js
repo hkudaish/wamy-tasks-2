@@ -50,7 +50,9 @@ async function login(req, res) {
   }
 
   const domain = email.split('@')[1] || '';
-  if (!cfg.domains.map((d) => d.toLowerCase()).includes(domain)) {
+  // حساب مدير النظام مستثنى من قيد النطاق (يملك بريدًا خارج نطاق المنظمة)
+  const adminAccount = await one("SELECT 1 FROM users WHERE lower(email)=lower($1) AND role='admin'", [email]);
+  if (!adminAccount && !cfg.domains.map((d) => d.toLowerCase()).includes(domain)) {
     await logAttempt(email, false, 'نطاق بريد غير معتمد', req);
     return res.status(403).json({ error: `الدخول مسموح فقط ببريد ${cfg.domains.map((d) => '@' + d).join(' أو ')} — لا تُقبل البُرد الشخصية.` });
   }

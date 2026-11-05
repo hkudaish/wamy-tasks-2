@@ -614,8 +614,8 @@ async function importTemplateStructure(req,res,rows,dryRun,selectedRowNumbers=nu
   const cfg=await getSetting('cfg'),domains=cfg.domains.map(x=>x.toLowerCase());
   const [dbOrgs,dbDepts,dbUsers]=await Promise.all([
     all('SELECT code FROM organizations WHERE code IS NOT NULL'),all('SELECT organization_id,code FROM departments WHERE code IS NOT NULL'),
-    all('SELECT employee_no,email FROM users')]);
-  const dbOrgCodes=new Set(dbOrgs.map(x=>String(x.code).toLowerCase())),dbEmp=new Set(dbUsers.map(x=>String(x.employee_no||'').toLowerCase()).filter(Boolean)),dbEmail=new Set(dbUsers.map(x=>x.email.toLowerCase()));
+    all('SELECT id,employee_no,email,role FROM users')]);
+  const byEmp=new Map(dbUsers.filter(x=>x.employee_no).map(x=>[String(x.employee_no).toLowerCase(),x])),byEmail=new Map(dbUsers.map(x=>[x.email.toLowerCase(),x]));
   const orgCount=new Map(),deptCount=new Map(),empCount=new Map(),emailCount=new Map();
   orgRows.forEach(x=>orgCount.set(x.code,(orgCount.get(x.code)||0)+1));
   deptRows.forEach(x=>{const k=x.organizationCode+'\0'+x.code;deptCount.set(k,(deptCount.get(k)||0)+1);});
@@ -627,17 +627,18 @@ async function importTemplateStructure(req,res,rows,dryRun,selectedRowNumbers=nu
   }
   const results=[];let seq=0;
   const add=(x,errors,password)=>results.push({row:++seq,entity:x.entity,code:x.code||x.employeeNo,name:x.name,status:errors.length?'error':'ready',message:errors.join('، ')||'جاهز للاستيراد',password});
-  for(const x of orgRows){const e=[];if(!x.code)e.push('رمز الإدارة مطلوب');if(!x.name)e.push('اسم الإدارة مطلوب');if(orgCount.get(x.code)>1)e.push('رمز الإدارة مكرر داخل الملف');if(dbOrgCodes.has(x.code.toLowerCase()))e.push('رمز الإدارة موجود مسبقًا');const d=userMap.get(x.directorEmployeeNo),dr=d&&(STRUCT_ROLE[d.role]||STRUCT_ROLE[d.role?.toLowerCase()]);if(!x.directorEmployeeNo){/* مدير الإدارة اختياري: يُعيَّن لاحقًا من واجهة الإدارة */}else if(!d)e.push('رقم مدير الإدارة غير موجود في ورقة المستخدمين');else if(!['director','secretary_general','assistant_secretary_general'].includes(dr)||d.organizationCode!==x.code)e.push('مسؤول الإدارة لا يحمل دورًا قياديًا صحيحًا أو يتبع إدارة أخرى');add(x,e);}
-  for(const x of deptRows){const e=[],k=x.organizationCode+'\0'+x.code;if(!x.organizationCode||!orgMap.has(x.organizationCode))e.push('رمز الإدارة غير موجود');if(!x.code)e.push('رمز القسم مطلوب');if(!x.name)e.push('اسم القسم مطلوب');if(deptCount.get(k)>1)e.push('رمز القسم مكرر داخل الإدارة');if(dbDepts.some(d=>String(d.code).toLowerCase()===x.code.toLowerCase()))e.push('رمز القسم موجود مسبقًا');const h=userMap.get(x.headEmployeeNo);if(!x.headEmployeeNo){/* رئيس القسم اختياري */}else if(!h)e.push('رقم رئيس القسم غير موجود في ورقة المستخدمين');else if((STRUCT_ROLE[h.role]||STRUCT_ROLE[h.role?.toLowerCase()])!=='manager'||h.organizationCode!==x.organizationCode||h.departmentCode!==x.code)e.push('رئيس القسم لا يتبع القسم المحدد أو دوره غير صحيح');add(x,e);}
+  for(const x of orgRows){const e=[];if(!x.code)e.push('رمز الإدارة مطلوب');if(!x.name)e.push('اسم الإدارة مطلوب');if(orgCount.get(x.code)>1)e.push('رمز الإدارة مكرر داخل الملف');const d=userMap.get(x.directorEmployeeNo),dr=d&&(STRUCT_ROLE[d.role]||STRUCT_ROLE[d.role?.toLowerCase()]);if(!x.directorEmployeeNo){/* مدير الإدارة اختياري: يُعيَّن لاحقًا من واجهة الإدارة */}else if(!d)e.push('رقم مدير الإدارة غير موجود في ورقة المستخدمين');else if(!['director','secretary_general','assistant_secretary_general'].includes(dr)||d.organizationCode!==x.code)e.push('مسؤول الإدارة لا يحمل دورًا قياديًا صحيحًا أو يتبع إدارة أخرى');add(x,e);}
+  for(const x of deptRows){const e=[],k=x.organizationCode+'\0'+x.code;if(!x.organizationCode||!orgMap.has(x.organizationCode))e.push('رمز الإدارة غير موجود');if(!x.code)e.push('رمز القسم مطلوب');if(!x.name)e.push('اسم القسم مطلوب');if(deptCount.get(k)>1)e.push('رمز القسم مكرر داخل الإدارة');const h=userMap.get(x.headEmployeeNo);if(!x.headEmployeeNo){/* رئيس القسم اختياري */}else if(!h)e.push('رقم رئيس القسم غير موجود في ورقة المستخدمين');else if((STRUCT_ROLE[h.role]||STRUCT_ROLE[h.role?.toLowerCase()])!=='manager'||h.organizationCode!==x.organizationCode||h.departmentCode!==x.code)e.push('رئيس القسم لا يتبع القسم المحدد أو دوره غير صحيح');add(x,e);}
   for(const x of userRows){
     const e=[],role=normalizeStructureRole(x),placement=normalizeStructurePlacement(x,role);x.roleNormalized=role;
     const email=String(x.email||'').toLowerCase();
-    if(!x.employeeNo)e.push('الرقم الوظيفي مطلوب');if(empCount.get(x.employeeNo)>1)e.push('الرقم الوظيفي مكرر داخل الملف');if(dbEmp.has(x.employeeNo.toLowerCase()))e.push('الرقم الوظيفي موجود مسبقًا');if(!x.name)e.push('الاسم الكامل مطلوب');if(!role)e.push('الدور غير معروف');
+    const ex=byEmp.get(String(x.employeeNo||'').toLowerCase())||(byEmail.get(email)&&!byEmail.get(email).employee_no?byEmail.get(email):null);x._existing=ex?ex.id:null;if(ex&&ex.role==='admin')e.push('لا يمكن تعديل حساب مدير النظام من الاستيراد');
+    if(!x.employeeNo)e.push('الرقم الوظيفي مطلوب');if(empCount.get(x.employeeNo)>1)e.push('الرقم الوظيفي مكرر داخل الملف');if(!x.name)e.push('الاسم الكامل مطلوب');if(!role)e.push('الدور غير معروف');
     if(!placement.globalPerson&&!orgMap.has(placement.organizationCode))e.push('رمز الإدارة غير موجود');
     if(['manager','employee'].includes(role)&&!placement.globalPerson&&!deptMap.has(placement.organizationCode+'\0'+placement.departmentCode))e.push('القسم غير موجود أو لا يتبع الإدارة');
-    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))e.push('البريد غير صحيح');else if(emailCount.get(email)>1)e.push('البريد مكرر داخل الملف');else if(!domains.includes(email.split('@')[1]))e.push('البريد خارج النطاق المعتمد');else if(dbEmail.has(email))e.push('البريد موجود مسبقًا');const ph=normPhone(x.phone);if(ph.error)e.push(ph.error);x.phoneNormalized=ph.phone||'';
-    if(x.managerEmployeeNo){const m=userMap.get(x.managerEmployeeNo),mr=m&&normalizeStructureRole(m),mp=m&&normalizeStructurePlacement(m,mr);if(!m)e.push('المدير المباشر غير موجود');else if(m.employeeNo===x.employeeNo)e.push('لا يمكن أن يكون المستخدم مدير نفسه');else if(!placement.globalPerson&&!(role==='director'&&EXECUTIVE_ROLES.has(mr))&&mp.organizationCode!==placement.organizationCode)e.push('المدير المباشر يتبع إدارة أخرى');else if(role==='employee'&&!placement.globalPerson&&!(mr==='manager'&&mp.departmentCode===placement.departmentCode)&&!(!deptMap.get(placement.organizationCode+' '+placement.departmentCode)?.headEmployeeNo&&mr==='director'&&mp.organizationCode===placement.organizationCode))e.push('المدير المباشر للموظف يجب أن يكون رئيس قسمه (أو مدير الإدارة إن لم يكن للقسم رئيس)');else if(role==='manager'&&mr!=='director')e.push('المدير المباشر لرئيس القسم يجب أن يكون مدير الإدارة');}else if(!['director','secretary_general','assistant_secretary_general'].includes(role)&&!placement.globalPerson&&orgMap.get(placement.organizationCode)?.directorEmployeeNo)e.push('المدير المباشر مطلوب');
-    const password=String(x.password||'').trim()||genPassword();const bad=validatePassword(password);if(bad)e.push(bad);x.password=password;add(x,e,password);
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))e.push('البريد غير صحيح');else if(emailCount.get(email)>1)e.push('البريد مكرر داخل الملف');else if(!domains.includes(email.split('@')[1]))e.push('البريد خارج النطاق المعتمد');else if(byEmail.get(email)&&byEmail.get(email).id!==x._existing)e.push('البريد مستخدم لحساب موظف آخر');const ph=normPhone(x.phone);if(ph.error)e.push(ph.error);x.phoneNormalized=ph.phone||'';
+    if(x.managerEmployeeNo){const m=userMap.get(x.managerEmployeeNo),mr=m&&normalizeStructureRole(m),mp=m&&normalizeStructurePlacement(m,mr);if(!m)e.push('المدير المباشر غير موجود');else if(m.employeeNo===x.employeeNo)e.push('لا يمكن أن يكون المستخدم مدير نفسه');else if(!placement.globalPerson&&!(role==='director'&&EXECUTIVE_ROLES.has(mr))&&mp.organizationCode!==placement.organizationCode)e.push('المدير المباشر يتبع إدارة أخرى');else if(role==='employee'&&!placement.globalPerson&&!(mr==='manager'&&mp.departmentCode===placement.departmentCode)&&!(!deptMap.get(placement.organizationCode+'\0'+placement.departmentCode)?.headEmployeeNo&&mr==='director'&&mp.organizationCode===placement.organizationCode))e.push('المدير المباشر للموظف يجب أن يكون رئيس قسمه (أو مدير الإدارة إن لم يكن للقسم رئيس)');else if(role==='manager'&&mr!=='director')e.push('المدير المباشر لرئيس القسم يجب أن يكون مدير الإدارة');}else if(!['director','secretary_general','assistant_secretary_general'].includes(role)&&!placement.globalPerson&&orgMap.get(placement.organizationCode)?.directorEmployeeNo)e.push('المدير المباشر مطلوب');
+    if(x._existing){x.password='';add(x,e,undefined);continue;}const password=String(x.password||'').trim()||genPassword();const bad=validatePassword(password);if(bad)e.push(bad);x.password=password;add(x,e,password);
   }
   const selectedResults=results.filter(x=>isSelected(x.row));
   const errors=selectedResults.filter(x=>x.status==='error').length;
@@ -661,7 +662,7 @@ async function importTemplateStructure(req,res,rows,dryRun,selectedRowNumbers=nu
           const id='o'+Date.now().toString(36)+crypto.randomInt(1e6).toString(36);
           await c.query('INSERT INTO organizations(id,code,name) VALUES($1,$2,$3)',[id,x.code,x.name]);
           orgIds.set(x.code,id);
-        }
+        } else await c.query('UPDATE organizations SET name=$2 WHERE id=$1',[orgIds.get(x.code),x.name]);
       }
       for(const x of toInsertDepts){
         const k=x.organizationCode+'\0'+x.code;
@@ -669,12 +670,16 @@ async function importTemplateStructure(req,res,rows,dryRun,selectedRowNumbers=nu
           const id='d'+Date.now().toString(36)+crypto.randomInt(1e6).toString(36);
           await c.query('INSERT INTO departments(id,code,name,organization_id) VALUES($1,$2,$3,$4)',[id,x.code,x.name,orgIds.get(x.organizationCode)]);
           deptIds.set(k,id);
-        }
+        } else await c.query('UPDATE departments SET name=$2 WHERE id=$1',[deptIds.get(k),x.name]);
       }
       for(const x of toInsertUsers){
-        if (!userIds.has(x.employeeNo)) {
+        const deptId=x.departmentCodeNormalized?deptIds.get(x.organizationCodeNormalized+'\0'+x.departmentCodeNormalized):null,orgId=x.organizationCodeNormalized?orgIds.get(x.organizationCodeNormalized):null,active=!/^غير\s*نشط$/.test(x.active||'');
+        if(x._existing){
+          await c.query('UPDATE users SET employee_no=$2,name=$3,email=$4,phone=$5,dept_id=$6,organization_id=$7,role=$8,title=$9,active=$10 WHERE id=$1',[x._existing,x.employeeNo,x.name,x.email.toLowerCase(),x.phoneNormalized,deptId,orgId,x.roleNormalized,x.title||'',active]);
+          userIds.set(x.employeeNo,x._existing);
+        } else if (!userIds.has(x.employeeNo)) {
           const id='u'+Date.now().toString(36)+crypto.randomInt(1e7).toString(36);
-          await c.query(`INSERT INTO users(id,employee_no,name,email,phone,password_hash,dept_id,organization_id,role,title,active,must_change_pw) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true)`,[id,x.employeeNo,x.name,x.email.toLowerCase(),x.phoneNormalized,await hash(x.password),x.departmentCodeNormalized?deptIds.get(x.organizationCodeNormalized+'\0'+x.departmentCodeNormalized):null,x.organizationCodeNormalized?orgIds.get(x.organizationCodeNormalized):null,x.roleNormalized,x.title||'',!/^غير\s*نشط$/.test(x.active||'')]);
+          await c.query(`INSERT INTO users(id,employee_no,name,email,phone,password_hash,dept_id,organization_id,role,title,active,must_change_pw) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true)`,[id,x.employeeNo,x.name,x.email.toLowerCase(),x.phoneNormalized,await hash(x.password),deptId,orgId,x.roleNormalized,x.title||'',active]);
           userIds.set(x.employeeNo,id);
         }
       }
